@@ -1,0 +1,3 @@
+# Errors: internal error codes, one boundary exception, an optional tryParse surface
+
+Failures propagate inside the parser as error codes (fast return, no throws) — throwing mid-scan is what makes exceptions expensive, and skipped code must never pay for error machinery. Errors materialize as a `JsonParseException` only at the public API boundary, with position and excerpt built lazily. An optional `tryParse` entry returns a `ParseResult` (shared success sentinel; the failure object is allocated only on failure) for callers who refuse exceptions — a Result/Either-style surface without its per-call allocation cost on success.
