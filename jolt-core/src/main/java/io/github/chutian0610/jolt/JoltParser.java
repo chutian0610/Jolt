@@ -44,6 +44,9 @@ public final class JoltParser {
     private int valueStart;
     private int valueEnd;
     private Token lastToken = Token.EOF;
+    // Start offset of the most recent token (value or structural); anchors container spans.
+    private int lastTokenStart;
+    private int tokenStart;
 
     // True when the most recent string span contains at least one escape (two-phase unescape).
     private boolean stringHasEscape;
@@ -67,12 +70,14 @@ public final class JoltParser {
     public Token nextToken() {
         Token t = nextTokenInternal();
         lastToken = t;
+        lastTokenStart = tokenStart;
         return t;
     }
 
     private Token nextTokenInternal() {
         while (true) {
             skipWhitespace();
+            tokenStart = pos;
             if (pos >= json.length) {
                 if (state == ST_TOP_AFTER) {
                     state = ST_TOP_DONE;
@@ -168,7 +173,7 @@ public final class JoltParser {
      */
     public String textValue() {
         if (!stringHasEscape) {
-            return new String(json, valueStart, valueEnd - valueStart, StandardCharsets.UTF_8);
+            return rawText();
         }
         return unescapeIntoScratch();
     }
@@ -252,8 +257,9 @@ public final class JoltParser {
 
     /**
      * The integer value of the most recent {@link Token#VALUE_NUMBER_INT}, parsed in place from
-     * the recorded span (no intermediate String). Throws {@link ArithmeticException} on overflow;
-     * use {@link #numberValue()} for promotion instead.
+     * the recorded span (no intermediate String). Domain overflow raises {@link ArithmeticException}
+     * (JDK convention for value-range failures — distinct from parse errors, which are always
+     * {@link JsonParseException}); use {@link #numberValue()} for promotion instead.
      */
     public long longValue() {
         int p = valueStart;
@@ -280,17 +286,22 @@ public final class JoltParser {
     /**
      * Skips the children of the most recent container token in one call (a no-op returning the
      * current token for scalars and closers). Skipping decodes nothing — lazy materialization.
+     * After skipping, the span readers address the whole container's raw source text.
      */
     public Token skipChildren() {
         if (lastToken != Token.START_OBJECT && lastToken != Token.START_ARRAY) {
             return lastToken;
         }
+        int containerStart = lastTokenStart;
         int targetDepth = depth - 1;
         while (depth > targetDepth) {
             if (nextToken() == Token.EOF) {
                 return Token.EOF;
             }
         }
+        valueStart = containerStart;
+        valueEnd = pos;
+        stringHasEscape = false;
         return lastToken;
     }
 
@@ -312,11 +323,7 @@ public final class JoltParser {
      */
     public Number numberValue() {
         if (lastToken == Token.VALUE_NUMBER_INT) {
-            try {
-                return longValue();
-            } catch (ArithmeticException overflow) {
-                return bigDecimalValue();
-            }
+            return fitsInLong() ? Long.valueOf(longValue()) : bigDecimalValue();
         }
         if (significantDigits() > 17) {
             return bigDecimalValue();
@@ -341,6 +348,27 @@ public final class JoltParser {
     /** The most recent number as an exact {@link BigDecimal}. */
     public BigDecimal bigDecimalValue() {
         return new BigDecimal(numberText());
+    }
+
+    /** Dry-runs the in-place accumulation to test long range without exception control flow. */
+    private boolean fitsInLong() {
+        int p = valueStart;
+        int end = valueEnd;
+        boolean negative = json[p] == '-';
+        if (negative) {
+            p++;
+        }
+        long limit = negative ? Long.MIN_VALUE : -Long.MAX_VALUE;
+        long acc = 0;
+        while (p < end) {
+            int digit = json[p] - '0';
+            if (acc < (limit + digit) / 10) {
+                return false;
+            }
+            acc = acc * 10 - digit;
+            p++;
+        }
+        return true;
     }
 
     /** Count of significant decimal digits in the span (leading zeros skipped), exponent ignored. */

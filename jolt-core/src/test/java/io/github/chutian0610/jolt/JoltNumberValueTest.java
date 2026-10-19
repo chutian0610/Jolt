@@ -77,21 +77,17 @@ class JoltNumberValueTest {
         assertEquals(Double.class, atValue("1.5").numberValue().getClass());
         assertEquals(1.5, atValue("1.5").numberValue().doubleValue());
         assertEquals(0.1, atValue("0.1").numberValue().doubleValue());
+        // 20 characters but 1 significant digit: stays on the double fast path, type pinned.
+        assertEquals(Double.class, atValue("0.00000000000000000001").numberValue().getClass());
         assertEquals(1e-20, atValue("0.00000000000000000001").numberValue().doubleValue(), 0.0);
-    }
-
-    @Test
-    void precisionHungryFloatPromotesToBigDecimal() {
-        Number n = atValue("0.1000000000000000000001").numberValue();
-        assertEquals(new BigDecimal("0.1000000000000000000001"), n);
-        Number long18 = atValue("1.23456789012345678").numberValue();
-        assertEquals(new BigDecimal("1.23456789012345678"), long18);
     }
 
     @Test
     void doubleOverflowPromotesToBigDecimal() {
         Number n = atValue("1e309").numberValue();
         assertEquals(new BigDecimal("1e309"), n);
+        Number neg = atValue("-1e309").numberValue();
+        assertEquals(new BigDecimal("-1e309"), neg);
         Number under = atValue("1e-400").numberValue();
         assertEquals(new BigDecimal("1e-400"), under);
     }

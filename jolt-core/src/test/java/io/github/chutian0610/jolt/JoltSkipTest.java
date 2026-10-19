@@ -80,4 +80,18 @@ class JoltSkipTest {
         assertEquals(Token.VALUE_NULL, parser.nextToken());
         assertEquals("null", parser.rawText());
     }
+
+    @Test
+    void skippedContainerRemainsReadableAsRawText() {
+        JoltParser parser = Jolt.parse(utf8("{\"a\":{\"x\":[1,2]},\"b\":7}"));
+        assertEquals(Token.START_OBJECT, parser.nextToken());
+        assertEquals(Token.FIELD_NAME, parser.nextToken());
+        assertEquals(Token.START_OBJECT, parser.nextToken());
+        assertEquals(Token.END_OBJECT, parser.skipChildren());
+        // The whole skipped container is still addressable as raw source text.
+        assertEquals("{\"x\":[1,2]}", parser.rawText());
+        // And parsing continues unaffected.
+        assertEquals(Token.FIELD_NAME, parser.nextToken());
+        assertEquals("b", parser.textValue());
+    }
 }
