@@ -51,7 +51,7 @@ tasks.test {
 }
 
 tasks.register<Test>("jsonTestSuiteTest") {
-    description = "Full JSONTestSuite run (y/n/i). Allowed to fail until T2 lands."
+    description = "Full JSONTestSuite run (y/n/i) — part of check; hard gate since T2."
     group = "verification"
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
@@ -60,5 +60,9 @@ tasks.register<Test>("jsonTestSuiteTest") {
         includeTags("json-test-suite")
     }
     systemProperty("jolt.jsontestsuite.dir", jsonTestSuiteDir.get().asFile.absolutePath)
-    ignoreFailures = true
+}
+
+// The suite is a gate now: every check (and therefore every CI build) runs the full corpus.
+tasks.named("check") {
+    dependsOn("jsonTestSuiteTest")
 }
