@@ -1,5 +1,6 @@
 package io.github.chutian0610.jolt;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
@@ -42,6 +43,12 @@ public final class JoltParser {
     // Span of the most recent value-bearing token; decoding happens in the readers.
     private int valueStart;
     private int valueEnd;
+    private Token lastToken = Token.EOF;
+
+    // True when the most recent string span contains at least one escape (two-phase unescape).
+    private boolean stringHasEscape;
+    // Reused decode buffer for escaped strings; grows on demand, never per parse.
+    private byte[] scratch;
 
     JoltParser(byte[] json) {
         this(json, DEFAULT_MAX_DEPTH);
@@ -58,6 +65,12 @@ public final class JoltParser {
 
     /** Advances to and returns the next token; {@link Token#EOF} once the document is exhausted. */
     public Token nextToken() {
+        Token t = nextTokenInternal();
+        lastToken = t;
+        return t;
+    }
+
+    private Token nextTokenInternal() {
         while (true) {
             skipWhitespace();
             if (pos >= json.length) {
@@ -147,14 +160,222 @@ public final class JoltParser {
         }
     }
 
-    /** The string content of the most recent string-bearing token. */
+    /**
+     * The decoded string content of the most recent string-bearing token. Two phases: a clean
+     * span constructs directly from the input (no intermediate copies); an escaped span decodes
+     * in a single pass into the reused scratch buffer. Escaped lone surrogates fail here, at
+     * materialization — never during scanning (lazy materialization).
+     */
     public String textValue() {
+        if (!stringHasEscape) {
+            return new String(json, valueStart, valueEnd - valueStart, StandardCharsets.UTF_8);
+        }
+        return unescapeIntoScratch();
+    }
+
+    private String unescapeIntoScratch() {
+        int len = valueEnd - valueStart;
+        if (scratch == null || scratch.length < len) {
+            scratch = new byte[Math.max(len, 64)];
+        }
+        int out = 0;
+        int p = valueStart;
+        while (p < valueEnd) {
+            byte b = json[p++];
+            if (b != '\\') {
+                scratch[out++] = b;
+                continue;
+            }
+            byte e = json[p++];
+            switch (e) {
+                case '"' -> scratch[out++] = '"';
+                case '\\' -> scratch[out++] = '\\';
+                case '/' -> scratch[out++] = '/';
+                case 'b' -> scratch[out++] = 8;
+                case 'f' -> scratch[out++] = 12;
+                case 'n' -> scratch[out++] = 10;
+                case 'r' -> scratch[out++] = 13;
+                case 't' -> scratch[out++] = 9;
+                case 'u' -> {
+                    int cp = hex4(p);
+                    p += 4;
+                    if (cp >= 0xD800 && cp <= 0xDBFF) {
+                        if (p + 6 <= valueEnd && json[p] == '\\' && json[p + 1] == 'u') {
+                            int low = hex4(p + 2);
+                            if (low < 0xDC00 || low > 0xDFFF) {
+                                throw error("unpaired surrogate escape in string");
+                            }
+                            p += 6;
+                            cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                        } else {
+                            throw error("unpaired surrogate escape in string");
+                        }
+                    } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+                        throw error("lone low surrogate escape in string");
+                    }
+                    out = encodeUtf8(cp, out);
+                }
+                default -> throw error("invalid escape in string"); // unreachable: scan-time validation
+            }
+        }
+        return new String(scratch, 0, out, StandardCharsets.UTF_8);
+    }
+
+    /** Reads 4 already-validated hex digits at {@code p} as a code unit. */
+    private int hex4(int p) {
+        int v = 0;
+        for (int i = 0; i < 4; i++) {
+            int d = json[p + i];
+            v = (v << 4) | (d <= '9' ? d - '0' : (d | 0x20) - 'a' + 10);
+        }
+        return v;
+    }
+
+    private int encodeUtf8(int cp, int out) {
+        if (cp < 0x80) {
+            scratch[out++] = (byte) cp;
+        } else if (cp < 0x800) {
+            scratch[out++] = (byte) (0xC0 | (cp >> 6));
+            scratch[out++] = (byte) (0x80 | (cp & 0x3F));
+        } else if (cp < 0x10000) {
+            scratch[out++] = (byte) (0xE0 | (cp >> 12));
+            scratch[out++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
+            scratch[out++] = (byte) (0x80 | (cp & 0x3F));
+        } else {
+            scratch[out++] = (byte) (0xF0 | (cp >> 18));
+            scratch[out++] = (byte) (0x80 | ((cp >> 12) & 0x3F));
+            scratch[out++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
+            scratch[out++] = (byte) (0x80 | (cp & 0x3F));
+        }
+        return out;
+    }
+
+    /**
+     * The integer value of the most recent {@link Token#VALUE_NUMBER_INT}, parsed in place from
+     * the recorded span (no intermediate String). Throws {@link ArithmeticException} on overflow;
+     * use {@link #numberValue()} for promotion instead.
+     */
+    public long longValue() {
+        int p = valueStart;
+        int end = valueEnd;
+        boolean negative = false;
+        if (json[p] == '-') {
+            negative = true;
+            p++;
+        }
+        // Accumulate negatively: Long.MIN_VALUE has no positive counterpart.
+        long limit = negative ? Long.MIN_VALUE : -Long.MAX_VALUE;
+        long acc = 0;
+        while (p < end) {
+            int digit = json[p] - '0';
+            if (acc < (limit + digit) / 10) {
+                throw new ArithmeticException("long overflow in number at offset " + valueStart);
+            }
+            acc = acc * 10 - digit;
+            p++;
+        }
+        return negative ? acc : -acc;
+    }
+
+    /**
+     * Skips the children of the most recent container token in one call (a no-op returning the
+     * current token for scalars and closers). Skipping decodes nothing — lazy materialization.
+     */
+    public Token skipChildren() {
+        if (lastToken != Token.START_OBJECT && lastToken != Token.START_ARRAY) {
+            return lastToken;
+        }
+        int targetDepth = depth - 1;
+        while (depth > targetDepth) {
+            if (nextToken() == Token.EOF) {
+                return Token.EOF;
+            }
+        }
+        return lastToken;
+    }
+
+    /** The raw, undecoded source text of the most recent value-bearing token. */
+    public String rawText() {
         return new String(json, valueStart, valueEnd - valueStart, StandardCharsets.UTF_8);
     }
 
-    /** The integer value of the most recent {@link Token#VALUE_NUMBER_INT}. */
-    public long longValue() {
-        return Long.parseLong(textValue());
+    /** The untouched source text of the most recent number token, exactly as it appeared. */
+    public String numberText() {
+        return rawText();
+    }
+
+    /**
+     * The most recent number under the number-promotion policy (ADR-0002): integers within long
+     * range as {@link Long}, integers that overflow as {@link BigDecimal}; floats up to 17
+     * significant digits and within double range as {@link Double}, precision-hungry or
+     * overflowing/underflowing floats as {@link BigDecimal}.
+     */
+    public Number numberValue() {
+        if (lastToken == Token.VALUE_NUMBER_INT) {
+            try {
+                return longValue();
+            } catch (ArithmeticException overflow) {
+                return bigDecimalValue();
+            }
+        }
+        if (significantDigits() > 17) {
+            return bigDecimalValue();
+        }
+        double d = Double.parseDouble(numberText());
+        if (d == Double.POSITIVE_INFINITY || d == Double.NEGATIVE_INFINITY
+                || (d == 0.0 && spanHasNonZeroDigit())) {
+            // Overflow, or underflow that would silently read as 0.
+            return bigDecimalValue();
+        }
+        return d;
+    }
+
+    /**
+     * The most recent number as a double. Correctness-first: delegates to
+     * {@link Double#parseDouble}; a hand-written conversion lands with the T8 benchmark push.
+     */
+    public double doubleValue() {
+        return Double.parseDouble(numberText());
+    }
+
+    /** The most recent number as an exact {@link BigDecimal}. */
+    public BigDecimal bigDecimalValue() {
+        return new BigDecimal(numberText());
+    }
+
+    /** Count of significant decimal digits in the span (leading zeros skipped), exponent ignored. */
+    private int significantDigits() {
+        int p = valueStart;
+        int end = valueEnd;
+        if (json[p] == '-') {
+            p++;
+        }
+        boolean seenNonZero = false;
+        int count = 0;
+        while (p < end) {
+            byte b = json[p];
+            if (b >= '0' && b <= '9') {
+                if (seenNonZero || b != '0') {
+                    seenNonZero = true;
+                    count++;
+                }
+            } else if (b == 'e' || b == 'E') {
+                break;
+            }
+            // '.' just passes through
+            p++;
+        }
+        return count;
+    }
+
+    private boolean spanHasNonZeroDigit() {
+        for (int p = valueStart; p < valueEnd; p++) {
+            byte b = json[p];
+            if (b >= '1' && b <= '9') {
+                return true;
+            }
+        }
+        return false;
     }
 
     // --- state helpers ---
@@ -209,6 +430,7 @@ public final class JoltParser {
     // --- scanners (grammar tightened in later slices) ---
 
     private void scanStringSpan() {
+        stringHasEscape = false;
         valueStart = pos;
         while (pos < json.length) {
             byte b = json[pos];
@@ -218,6 +440,7 @@ public final class JoltParser {
                 return;
             }
             if (b == '\\') {
+                stringHasEscape = true;
                 validateEscape();
                 continue;
             }
