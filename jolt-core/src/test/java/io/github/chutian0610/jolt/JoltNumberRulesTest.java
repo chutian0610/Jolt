@@ -2,22 +2,11 @@ package io.github.chutian0610.jolt;
 
 import org.junit.jupiter.api.Test;
 
-import java.nio.charset.StandardCharsets;
-
+import static io.github.chutian0610.jolt.JoltTestSupport.tokens;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class JoltNumberRulesTest {
-
-    private static Token[] tokens(String json) {
-        JoltParser parser = Jolt.parse(json.getBytes(StandardCharsets.UTF_8));
-        java.util.List<Token> out = new java.util.ArrayList<>();
-        Token t;
-        while ((t = parser.nextToken()) != Token.EOF) {
-            out.add(t);
-        }
-        return out.toArray(new Token[0]);
-    }
 
     private static void assertRejected(String json) {
         assertThrows(JsonParseException.class, () -> tokens(json), json);

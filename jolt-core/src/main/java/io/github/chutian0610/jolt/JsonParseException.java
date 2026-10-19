@@ -2,7 +2,9 @@ package io.github.chutian0610.jolt;
 
 /**
  * The boundary exception (ADR-0005): raised only at the public API boundary when a document
- * violates strict RFC 8259 semantics. Position and excerpt reporting is completed in T4.
+ * violates strict RFC 8259 semantics. Position and excerpt reporting is completed in T4 (#7);
+ * until then, internal propagation still uses throws transitional scanners — the error-code
+ * plumbing (fast return, no internal throws) also lands in T4.
  */
 public class JsonParseException extends RuntimeException {
 

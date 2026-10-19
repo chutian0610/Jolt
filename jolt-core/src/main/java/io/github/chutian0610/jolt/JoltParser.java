@@ -1,6 +1,7 @@
 package io.github.chutian0610.jolt;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 /**
  * Streaming token-pull parser over a UTF-8 byte[]. Tokens record spans of the input; values are
@@ -30,7 +31,9 @@ public final class JoltParser {
 
     private final byte[] json;
     private final int maxDepth;
-    private final byte[] containerStack;
+    // Grown on demand (doubling, capped at maxDepth) so a huge configured limit never
+    // pre-allocates a huge array up front.
+    private byte[] containerStack;
 
     private int pos;
     private int depth;
@@ -50,7 +53,7 @@ public final class JoltParser {
         }
         this.json = json;
         this.maxDepth = maxDepth;
-        this.containerStack = new byte[maxDepth];
+        this.containerStack = new byte[Math.min(maxDepth, 16)];
     }
 
     /** Advances to and returns the next token; {@link Token#EOF} once the document is exhausted. */
@@ -83,26 +86,10 @@ public final class JoltParser {
                     return Token.START_ARRAY;
                 }
                 case '}' -> {
-                    if (state == ST_OBJ_KEY_OR_END) {
-                        pop();
-                        return Token.END_OBJECT;
-                    }
-                    if (state == ST_AFTER && top() == OBJECT) {
-                        pop();
-                        return Token.END_OBJECT;
-                    }
-                    throw error("'}' not allowed here");
+                    return closeContainer(OBJECT, Token.END_OBJECT, "'}'");
                 }
                 case ']' -> {
-                    if (state == ST_ARR_VALUE_OR_END) {
-                        pop();
-                        return Token.END_ARRAY;
-                    }
-                    if (state == ST_AFTER && top() == ARRAY) {
-                        pop();
-                        return Token.END_ARRAY;
-                    }
-                    throw error("']' not allowed here");
+                    return closeContainer(ARRAY, Token.END_ARRAY, "']'");
                 }
                 case ',' -> {
                     if (state != ST_AFTER) {
@@ -186,9 +173,25 @@ public final class JoltParser {
         return (depth == 0) ? ST_TOP_AFTER : ST_AFTER;
     }
 
+    /** Closes the current container if the grammar allows it here; otherwise fails. */
+    private Token closeContainer(byte container, Token endToken, String what) {
+        boolean atOpen = (container == OBJECT)
+                ? state == ST_OBJ_KEY_OR_END
+                : state == ST_ARR_VALUE_OR_END;
+        if (atOpen || (state == ST_AFTER && top() == container)) {
+            pop();
+            return endToken;
+        }
+        throw error(what + " not allowed here");
+    }
+
     private void push(byte container) {
         if (depth == maxDepth) {
             throw error("nesting depth exceeds limit " + maxDepth);
+        }
+        if (depth == containerStack.length) {
+            containerStack = Arrays.copyOf(containerStack,
+                    Math.min(containerStack.length * 2, maxDepth));
         }
         containerStack[depth] = container;
         depth++;
@@ -247,8 +250,8 @@ public final class JoltParser {
                         throw error("truncated \\u escape");
                     }
                     byte h = json[pos++];
-                    boolean hex = (h >= '0' && h <= '9') || (h >= 'a' && h <= 'f') || (h >= 'A' && h <= 'F');
-                    if (!hex) {
+                    boolean isHexDigit = (h >= '0' && h <= '9') || (h >= 'a' && h <= 'f') || (h >= 'A' && h <= 'F');
+                    if (!isHexDigit) {
                         throw error("invalid hex digit in \\u escape");
                     }
                 }

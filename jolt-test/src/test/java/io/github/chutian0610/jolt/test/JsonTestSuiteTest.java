@@ -36,8 +36,10 @@ import static org.junit.jupiter.api.Assertions.fail;
 @Tag("json-test-suite")
 class JsonTestSuiteTest {
 
+    private static Properties manifestCache;
+
     @TestFactory
-    Stream<DynamicTest> jsonTestSuite() throws IOException {
+    Stream<DynamicTest> jsonTestSuite() {
         File dir = corpusDir();
         File[] corpus = dir.listFiles((d, name) -> name.endsWith(".json"));
         if (corpus == null) {
@@ -81,52 +83,48 @@ class JsonTestSuiteTest {
         return dir;
     }
 
-    private static Properties manifest() throws IOException {
-        Properties props = new Properties();
-        try (InputStream in = JsonTestSuiteTest.class
-                .getResourceAsStream("/jsontestsuite/i-manifest.properties")) {
-            if (in == null) {
-                fail("i-manifest.properties missing from test resources");
+    private static synchronized Properties manifest() throws IOException {
+        if (manifestCache == null) {
+            Properties props = new Properties();
+            try (InputStream in = JsonTestSuiteTest.class
+                    .getResourceAsStream("/jsontestsuite/i-manifest.properties")) {
+                if (in == null) {
+                    fail("i-manifest.properties missing from test resources");
+                }
+                props.load(in);
             }
-            props.load(in);
+            manifestCache = props;
         }
-        return props;
+        return manifestCache;
     }
 
     private static void assertManifestBehavior(File file) throws IOException {
-        String expected;
-        try {
-            expected = manifest().getProperty(file.getName());
-        } catch (IOException e) {
-            throw new IllegalStateException("cannot read i-manifest", e);
-        }
+        String expected = manifest().getProperty(file.getName());
         if (expected == null) {
             fail("No manifest entry for " + file.getName() + " — record its behavior deliberately");
         }
         if (expected.equals("accept")) {
-            assertDoesNotThrow(() -> drain(Jolt.parse(read(file))), file.getName());
+            assertDoesNotThrow(() -> drain(Files.readAllBytes(file.toPath())), file.getName());
         } else if (expected.equals("reject")) {
-            assertThrows(JsonParseException.class, () -> drain(Jolt.parse(read(file))), file.getName());
+            assertThrows(JsonParseException.class,
+                    () -> drain(Files.readAllBytes(file.toPath())), file.getName());
         } else {
             fail("Unknown manifest value '" + expected + "' for " + file.getName());
         }
     }
 
-    private static byte[] read(File file) throws IOException {
-        return Files.readAllBytes(file.toPath());
-    }
-
     private static void assertParsesToEof(File file) throws IOException {
-        byte[] json = read(file);
-        assertDoesNotThrow(() -> drain(Jolt.parse(json)), file.getName());
+        byte[] json = Files.readAllBytes(file.toPath());
+        assertDoesNotThrow(() -> drain(json), file.getName());
     }
 
     private static void assertRejected(File file) throws IOException {
-        byte[] json = read(file);
-        assertThrows(JsonParseException.class, () -> drain(Jolt.parse(json)), file.getName());
+        byte[] json = Files.readAllBytes(file.toPath());
+        assertThrows(JsonParseException.class, () -> drain(json), file.getName());
     }
 
-    private static void drain(JoltParser parser) {
+    private static void drain(byte[] json) {
+        JoltParser parser = Jolt.parse(json);
         while (parser.nextToken() != Token.EOF) {
             // consume the stream
         }

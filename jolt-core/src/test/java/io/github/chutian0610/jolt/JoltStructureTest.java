@@ -2,24 +2,11 @@ package io.github.chutian0610.jolt;
 
 import org.junit.jupiter.api.Test;
 
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.List;
-
+import static io.github.chutian0610.jolt.JoltTestSupport.tokens;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class JoltStructureTest {
-
-    private static Token[] tokens(String json) {
-        JoltParser parser = Jolt.parse(json.getBytes(StandardCharsets.UTF_8));
-        List<Token> collected = new ArrayList<>();
-        Token t;
-        while ((t = parser.nextToken()) != Token.EOF) {
-            collected.add(t);
-        }
-        return collected.toArray(new Token[0]);
-    }
 
     private static void assertRejected(String json) {
         assertThrows(JsonParseException.class, () -> tokens(json), json);

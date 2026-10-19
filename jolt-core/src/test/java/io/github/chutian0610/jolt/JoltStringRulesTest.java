@@ -2,16 +2,12 @@ package io.github.chutian0610.jolt;
 
 import org.junit.jupiter.api.Test;
 
-import java.nio.charset.StandardCharsets;
-
+import static io.github.chutian0610.jolt.JoltTestSupport.drain;
+import static io.github.chutian0610.jolt.JoltTestSupport.utf8;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class JoltStringRulesTest {
-
-    private static byte[] utf8(String s) {
-        return s.getBytes(StandardCharsets.UTF_8);
-    }
 
     private static byte[] bytes(int... raw) {
         byte[] a = new byte[raw.length];
@@ -19,13 +15,6 @@ class JoltStringRulesTest {
             a[i] = (byte) raw[i];
         }
         return a;
-    }
-
-    private static void drain(byte[] json) {
-        JoltParser parser = Jolt.parse(json);
-        while (parser.nextToken() != Token.EOF) {
-            // consume
-        }
     }
 
     private static void assertAccepted(String json) {
@@ -115,8 +104,8 @@ class JoltStringRulesTest {
 
     @Test
     void acceptsThreeByteMinimumAndMaximumForms() {
-        assertAccepted(new String(bytes('"', 0xE0, 0xA0, 0x80, '"'), StandardCharsets.UTF_8)); // U+0800
-        assertAccepted(new String(bytes('"', 0xEF, 0xBF, 0xBF, '"'), StandardCharsets.UTF_8)); // U+FFFF
+        assertDoesNotThrow(() -> drain(bytes('"', 0xE0, 0xA0, 0x80, '"'))); // U+0800, 3-byte minimum
+        assertDoesNotThrow(() -> drain(bytes('"', 0xEF, 0xBF, 0xBF, '"'))); // U+FFFF, 3-byte maximum
     }
 
     @Test

@@ -4,22 +4,15 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 
+import static io.github.chutian0610.jolt.JoltTestSupport.drain;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
 class JoltDepthLimitTest {
 
     private static byte[] nestedArrays(int depth) {
         return ("[".repeat(depth) + "1" + "]".repeat(depth)).getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static void drain(byte[] json) {
-        JoltParser parser = Jolt.parse(json);
-        while (parser.nextToken() != Token.EOF) {
-            // consume
-        }
     }
 
     @Test
@@ -35,18 +28,8 @@ class JoltDepthLimitTest {
 
     @Test
     void configuredLimitIsEnforced() {
-        assertDoesNotThrow(() -> {
-            JoltParser parser = Jolt.parse(nestedArrays(2), 2);
-            while (parser.nextToken() != Token.EOF) {
-                // consume
-            }
-        });
-        JsonParseException e = assertThrows(JsonParseException.class, () -> {
-            JoltParser parser = Jolt.parse(nestedArrays(3), 2);
-            while (parser.nextToken() != Token.EOF) {
-                // consume
-            }
-        });
+        assertDoesNotThrow(() -> drain(nestedArrays(2), 2));
+        JsonParseException e = assertThrows(JsonParseException.class, () -> drain(nestedArrays(3), 2));
         assertTrue(e.getMessage().contains("depth"));
     }
 
