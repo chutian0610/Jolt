@@ -1,8 +1,8 @@
 package io.github.chutian0610.jolt;
 
 /**
- * Singleton tokens produced by the streaming parser. Values are materialized lazily via the
- * cursor readers on {@link JoltParser}, never inside the token itself.
+ * Singleton tokens produced by the streaming parser. Values are materialized lazily by the value
+ * readers on {@link JoltParser} (lazy materialization), never inside the token itself.
  */
 public enum Token {
     START_OBJECT,

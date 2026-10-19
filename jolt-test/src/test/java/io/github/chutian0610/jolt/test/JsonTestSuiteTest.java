@@ -29,11 +29,14 @@ class JsonTestSuiteTest {
     Stream<DynamicTest> jsonTestSuite() throws IOException {
         File dir = new File(System.getProperty("jolt.jsontestsuite.dir", ""));
         if (!dir.isDirectory()) {
-            return Stream.empty();
+            // Wiring failure, not a pass: the suite must never silently run zero cases.
+            throw new IllegalStateException(
+                    "JSONTestSuite corpus not found at " + dir
+                            + " — run via ./gradlew :jolt-test:jsonTestSuiteTest so the download task provides it");
         }
         File[] corpus = dir.listFiles((d, name) -> name.endsWith(".json"));
         if (corpus == null) {
-            return Stream.empty();
+            throw new IllegalStateException("Cannot list corpus directory " + dir);
         }
         return Stream.of(corpus)
                 .filter(f -> f.getName().startsWith("y_") || f.getName().startsWith("n_"))

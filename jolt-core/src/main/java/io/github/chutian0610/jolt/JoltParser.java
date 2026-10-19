@@ -4,8 +4,8 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Streaming token-pull parser over a UTF-8 byte[]. Tokens record spans of the input; values are
- * materialized lazily by the cursor readers. Instances are mutable, reusable for one document at
- * a time, and not thread-safe.
+ * materialized lazily by the value readers (lazy materialization). Instances are mutable, reusable
+ * for one document at a time, and not thread-safe.
  */
 public final class JoltParser {
 
@@ -56,14 +56,14 @@ public final class JoltParser {
                         pendingFieldName = false;
                         return Token.FIELD_NAME;
                     }
-                    throw new IllegalStateException("Unexpected string token at offset " + (pos - 1));
+                    throw new JsonParseException("Unexpected string token at offset " + (pos - 1));
                 }
                 default -> {
                     if (isNumberStart(b)) {
                         scanNumberSpan();
                         return Token.VALUE_NUMBER_INT;
                     }
-                    throw new IllegalStateException("Unexpected character at offset " + (pos - 1));
+                    throw new JsonParseException("Unexpected character at offset " + (pos - 1));
                 }
             }
         }
@@ -85,7 +85,7 @@ public final class JoltParser {
             pos++;
         }
         if (pos >= json.length) {
-            throw new IllegalStateException("Unterminated string at offset " + valueStart);
+            throw new JsonParseException("Unterminated string at offset " + valueStart);
         }
         valueEnd = pos;
         pos++; // closing quote

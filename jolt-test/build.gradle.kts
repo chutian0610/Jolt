@@ -42,15 +42,12 @@ val downloadJsonTestSuite by tasks.registering {
     }
 }
 
+// The plain `test` task stays offline: the suite is excluded by tag and the corpus is NOT
+// downloaded for it (no gh/network dependency for a plain ./gradlew build).
 tasks.test {
-    // The suite is wired but gated behind its own tag: the minimal T1 lexer cannot pass it yet.
-    // `./gradlew build` stays green; `./gradlew :jolt-test:jsonTestSuiteTest` runs the full
-    // suite (ignoreFailures until T2 makes it green).
-    dependsOn(downloadJsonTestSuite)
     useJUnitPlatform {
         excludeTags("json-test-suite")
     }
-    systemProperty("jolt.jsontestsuite.dir", jsonTestSuiteDir.get().asFile.absolutePath)
 }
 
 tasks.register<Test>("jsonTestSuiteTest") {
