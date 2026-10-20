@@ -63,4 +63,20 @@ class JoltExceptionDiagnosticsTest {
         assertEquals("just a detail", e.getMessage());
         assertEquals(-1, e.getOffset());
     }
+
+    @Test
+    void caretAlignsWithDisplayColumnsForMultibyteInput() {
+        // 'é' is two UTF-8 bytes: the byte column is one larger than the display column,
+        // but the caret must sit under '?' as a human sees it.
+        byte[] json = utf8("{\"é\": ?}");
+        int offset = json.length - 2; // the '?' byte
+        JsonParseException e = new JsonParseException("bad character", json, offset);
+        int caret = e.getExcerpt().split("\n", -1)[1].indexOf('^');
+        int displayIndex = "{\"é\": ?}".indexOf('?');
+        assertEquals(displayIndex, caret);
+
+        // Char-domain input: identical display alignment.
+        JsonParseException fromString = new JsonParseException("bad character", "{\"é\": ?}", offset - 1);
+        assertEquals(caret, fromString.getExcerpt().split("\n", -1)[1].indexOf('^'));
+    }
 }

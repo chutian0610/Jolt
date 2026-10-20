@@ -18,7 +18,9 @@ public class JsonParseException extends RuntimeException {
     private final transient char[] jsonChars;
     private final int offset;
 
-    // Lazy, cached diagnostics (offset >= 0 only).
+    // Lazy, cached diagnostics (offset >= 0 only). A boolean gate — not a -1 sentinel —
+    // because transient ints deserialize to 0, which must not fake a computed position.
+    private transient boolean positionComputed;
     private transient int line = -1;
     private transient int column = -1;
     private transient int lineStart = -1;
@@ -70,9 +72,9 @@ public class JsonParseException extends RuntimeException {
         return offset;
     }
 
-    /** 1-based line number of the error; -1 if unavailable. */
+    /** 1-based line number ('\n'-delimited) of the error; -1 if unavailable. */
     public int getLine() {
-        if (line == -1) {
+        if (!positionComputed) {
             computePosition();
         }
         return line;
@@ -80,7 +82,7 @@ public class JsonParseException extends RuntimeException {
 
     /** 1-based column number of the error; -1 if unavailable. */
     public int getColumn() {
-        if (column == -1) {
+        if (!positionComputed) {
             computePosition();
         }
         return column;
@@ -97,12 +99,22 @@ public class JsonParseException extends RuntimeException {
         return message;
     }
 
-    /** The error line with a caret marking the position; empty when no position. */
+    /** The error line with a caret marking the position (aligned to display columns); empty
+     * when no position. */
     public String getExcerpt() {
         if (offset < 0 || getLine() < 0) {
             return "";
         }
-        return errorLine() + "\n" + " ".repeat(column - 1) + "^";
+        return errorLine() + "\n" + " ".repeat(displayPrefixLength()) + "^";
+    }
+
+    /** Display (character) width of the error line's prefix up to the error position. */
+    private int displayPrefixLength() {
+        if (jsonBytes != null) {
+            // Byte offsets shrink when decoded: the prefix's char count is the caret position.
+            return new String(jsonBytes, lineStart, offset - lineStart, StandardCharsets.UTF_8).length();
+        }
+        return offset - lineStart;
     }
 
     private void computePosition() {
@@ -126,6 +138,7 @@ public class JsonParseException extends RuntimeException {
         this.column = offset - start + 1;
         this.lineStart = start;
         this.lineEnd = end;
+        this.positionComputed = true;
     }
 
     private boolean hasInput() {
