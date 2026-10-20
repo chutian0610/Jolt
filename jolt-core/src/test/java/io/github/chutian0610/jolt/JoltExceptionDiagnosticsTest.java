@@ -79,4 +79,37 @@ class JoltExceptionDiagnosticsTest {
         JsonParseException fromString = new JsonParseException("bad character", "{\"é\": ?}", offset - 1);
         assertEquals(caret, fromString.getExcerpt().split("\n", -1)[1].indexOf('^'));
     }
+
+    @Test
+    void charArrayInputGetsTheSameDiagnosticsAsStringInput() {
+        // Direct char[] coverage for the UTF-16 engine's exception form (T14 review finding).
+        char[] json = DOC.toCharArray();
+        JsonParseException fromChars = new JsonParseException("bad character", json, ERROR_OFFSET);
+        JsonParseException fromString = new JsonParseException("bad character", DOC, ERROR_OFFSET);
+        assertEquals(fromString.getLine(), fromChars.getLine());
+        assertEquals(fromString.getColumn(), fromChars.getColumn());
+        assertEquals(fromString.getMessage(), fromChars.getMessage());
+        assertEquals(fromString.getExcerpt(), fromChars.getExcerpt());
+    }
+
+    @Test
+    void deserializedPositionedExceptionReportsNoDiagnostics() throws Exception {
+        JsonParseException e = new JsonParseException("bad character", utf8(DOC), ERROR_OFFSET);
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (java.io.ObjectOutputStream out = new java.io.ObjectOutputStream(bytes)) {
+            out.writeObject(e);
+        }
+        JsonParseException revived;
+        try (java.io.ObjectInputStream in = new java.io.ObjectInputStream(
+                new java.io.ByteArrayInputStream(bytes.toByteArray()))) {
+            revived = (JsonParseException) in.readObject();
+        }
+        // The transient input source is gone; the offset field survives (not transient),
+        // but line/column stay unavailable — never wrong — and the excerpt is empty.
+        assertEquals(ERROR_OFFSET, revived.getOffset());
+        assertEquals(-1, revived.getLine());
+        assertEquals(-1, revived.getColumn());
+        assertEquals("bad character", revived.getMessage());
+        assertEquals("", revived.getExcerpt());
+    }
 }

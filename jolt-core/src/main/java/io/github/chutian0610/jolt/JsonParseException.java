@@ -186,8 +186,13 @@ public class JsonParseException extends RuntimeException {
     }
 
     private void computePosition() {
+        positionComputed = true;
         if (input == null) {
-            return; // post-deserialization or detail-only: diagnostics stay unavailable
+            // Deserialization: transient ints arrive as 0 — the unavailable contract (-1)
+            // must be set explicitly, never faked by a default value.
+            this.line = -1;
+            this.column = -1;
+            return;
         }
         int start = 0;
         int l = 1;
@@ -205,6 +210,5 @@ public class JsonParseException extends RuntimeException {
         this.column = offset - start + 1;
         this.lineStart = start;
         this.lineEnd = end;
-        this.positionComputed = true;
     }
 }
