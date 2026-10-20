@@ -1,21 +1,70 @@
 package io.github.chutian0610.jolt.test;
 
+import io.github.chutian0610.jolt.JoltParser;
+import io.github.chutian0610.jolt.Token;
+
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Properties;
+import java.util.stream.Stream;
 
-/** Shared corpus helpers: directory access, cached manifest, and fail-loud case classification. */
+/**
+ * The corpus module: typed access to the pinned JSONTestSuite cases plus the shared token
+ * helpers the gate classes run their verdict logic with. Gate classes hold verdicts only —
+ * corpus listing, byte reading, and expected-verdict classification live here.
+ */
 final class CorpusSupport {
 
     private static Properties manifestCache;
 
+    /** One corpus case: its name, its exact bytes, and the recorded expected verdict. */
+    record GateCase(String name, byte[] bytes, boolean accept) {}
+
     private CorpusSupport() {}
 
-    static File corpusDir() {
+    /** Every y_ case (guaranteed-accept documents: round-trip and lenient-superset gates). */
+    static Stream<GateCase> yCases() {
+        return cases("y_");
+    }
+
+    /** Every y_/n_/i_ case with its fail-loud expected verdict. */
+    static Stream<GateCase> verdictCases() {
+        return cases(null);
+    }
+
+    /** The i_ cases, with their manifest-recorded verdicts. */
+    static Stream<GateCase> iCases() {
+        return cases("i_");
+    }
+
+    private static Stream<GateCase> cases(String prefix) {
+        File dir = corpusDir();
+        File[] files = dir.listFiles((d, name) -> name.endsWith(".json")
+                && (prefix == null || name.startsWith(prefix)));
+        if (files == null || files.length == 0) {
+            throw new IllegalStateException("No corpus cases (prefix " + prefix + ") in " + dir);
+        }
+        Arrays.sort(files);
+        return Arrays.stream(files).map(f -> {
+            try {
+                return new GateCase(f.getName(), Files.readAllBytes(f.toPath()), expectAccept(f.getName()));
+            } catch (IOException e) {
+                throw new IllegalStateException("cannot read " + f, e);
+            }
+        });
+    }
+
+    private static File corpusDir() {
         File dir = new File(System.getProperty("jolt.jsontestsuite.dir", ""));
         if (!dir.isDirectory()) {
-            throw new IllegalStateException("JSONTestSuite corpus not found at " + dir);
+            throw new IllegalStateException(
+                    "JSONTestSuite corpus not found at " + dir
+                            + " — run via ./gradlew :jolt-test:jsonTestSuiteTest so the download task provides it");
         }
         return dir;
     }
@@ -56,5 +105,22 @@ final class CorpusSupport {
                 return "accept".equals(recorded);
             }
         }
+    }
+
+    /** Drains the token stream to EOF, failing on any parse error. */
+    static void drain(JoltParser parser) {
+        while (parser.nextToken() != Token.EOF) {
+            // consume
+        }
+    }
+
+    /** The full token stream of a document (to EOF). */
+    static Token[] tokens(JoltParser parser) {
+        List<Token> out = new ArrayList<>();
+        Token t;
+        while ((t = parser.nextToken()) != Token.EOF) {
+            out.add(t);
+        }
+        return out.toArray(new Token[0]);
     }
 }

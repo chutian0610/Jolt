@@ -8,17 +8,15 @@ import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.TestFactory;
 
-import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
+import static io.github.chutian0610.jolt.test.CorpusSupport.GateCase;
+import static io.github.chutian0610.jolt.test.CorpusSupport.tokens;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * Round-trip gate (T6): every y_ corpus case is parsed, rewritten through the JoltWriter, and
@@ -30,33 +28,23 @@ class RoundTripTest {
 
     @TestFactory
     Iterable<DynamicTest> yCasesRoundTripThroughTheWriter() {
-        File dir = corpusDir();
-        File[] corpus = dir.listFiles((d, name) -> name.startsWith("y_") && name.endsWith(".json"));
-        if (corpus == null) {
-            throw new IllegalStateException("Cannot list corpus directory " + dir);
-        }
-        Arrays.sort(corpus);
         List<DynamicTest> tests = new ArrayList<>();
-        for (File f : corpus) {
-            tests.add(DynamicTest.dynamicTest("bytes/" + f.getName(), () -> {
-                byte[] orig = Files.readAllBytes(f.toPath());
-                assertRoundTrip(orig);
+        for (GateCase c : CorpusSupport.yCases().toList()) {
+            tests.add(DynamicTest.dynamicTest("bytes/" + c.name(), () -> {
+                byte[] rewritten = rewrite(c.bytes());
+                assertArrayEquals(tokens(Jolt.parse(c.bytes())), tokens(Jolt.parse(rewritten)), c.name());
+                assertArrayEquals(rewrite(rewritten), rewritten, "canonical form must be a fixed point: " + c.name());
             }));
-            tests.add(DynamicTest.dynamicTest("string/" + f.getName(), () -> {
-                String orig = new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8);
+            tests.add(DynamicTest.dynamicTest("string/" + c.name(), () -> {
+                String orig = new String(c.bytes(), StandardCharsets.UTF_8);
                 byte[] rewritten = rewriteUtf16(orig);
-                assertEquals(tokensUtf16(orig), tokensUtf16Bytes(rewritten), f.getName());
+                assertArrayEquals(tokens(Jolt.parse(orig)),
+                        tokens(Jolt.parse(new String(rewritten, StandardCharsets.UTF_8))), c.name());
                 assertArrayEquals(rewriteUtf16(new String(rewritten, StandardCharsets.UTF_8)), rewritten,
-                        "canonical form must be a fixed point: " + f.getName());
+                        "canonical form must be a fixed point: " + c.name());
             }));
         }
         return tests;
-    }
-
-    private static void assertRoundTrip(byte[] orig) throws IOException {
-        byte[] rewritten = rewrite(orig);
-        assertEquals(tokens(orig), tokens(rewritten));
-        assertArrayEquals(rewrite(rewritten), rewritten, "canonical form must be a fixed point");
     }
 
     /** Parses UTF-8 bytes and re-emits the full token stream through a fresh writer. */
@@ -101,37 +89,5 @@ class RoundTripTest {
                 default -> throw new AssertionError("unexpected token " + t);
             }
         }
-    }
-
-    private static List<Token> tokens(byte[] json) {
-        JoltParser parser = Jolt.parse(json);
-        List<Token> out = new ArrayList<>();
-        Token t;
-        while ((t = parser.nextToken()) != Token.EOF) {
-            out.add(t);
-        }
-        return out;
-    }
-
-    private static List<Token> tokensUtf16(String json) {
-        JoltParser parser = Jolt.parse(json);
-        List<Token> out = new ArrayList<>();
-        Token t;
-        while ((t = parser.nextToken()) != Token.EOF) {
-            out.add(t);
-        }
-        return out;
-    }
-
-    private static List<Token> tokensUtf16Bytes(byte[] json) {
-        return tokensUtf16(new String(json, StandardCharsets.UTF_8));
-    }
-
-    private static File corpusDir() {
-        File dir = new File(System.getProperty("jolt.jsontestsuite.dir", ""));
-        if (!dir.isDirectory()) {
-            throw new IllegalStateException("JSONTestSuite corpus not found at " + dir);
-        }
-        return dir;
     }
 }

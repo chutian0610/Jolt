@@ -10,12 +10,9 @@ import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.TestFactory;
 
-import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
-import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
@@ -99,25 +96,15 @@ class DifferentialTest {
             "i_number_very_big_negative_int.json");
 
     @TestFactory
-    Iterable<DynamicTest> jacksonDifferential() throws IOException {
-        File dir = CorpusSupport.corpusDir();
-        File[] corpus = dir.listFiles((d, name) -> name.matches("[yni]_.*\\.json"));
-        if (corpus == null || corpus.length == 0) {
-            throw new IllegalStateException("No corpus cases in directory " + dir);
-        }
-        Arrays.sort(corpus);
+    Iterable<DynamicTest> jacksonDifferential() {
         List<DynamicTest> tests = new ArrayList<>();
-        for (File f : corpus) {
-            byte[] raw = Files.readAllBytes(f.toPath());
-            tests.add(DynamicTest.dynamicTest(f.getName(), () -> {
-                boolean joltAccept = CorpusSupport.expectAccept(f.getName());
-
+        for (CorpusSupport.GateCase c : CorpusSupport.verdictCases().toList()) {
+            tests.add(DynamicTest.dynamicTest(c.name(), () -> {
                 JsonNode jackson;
                 try {
-                    jackson = JACKSON.readTree(raw);
+                    jackson = JACKSON.readTree(c.bytes());
                 } catch (IOException jacksonRejected) {
-                    assertFalse(joltAccept,
-                            f.getName() + ": Jolt accepts, Jackson rejects");
+                    assertFalse(c.accept(), c.name() + ": Jolt accepts, Jackson rejects");
                     return;
                 }
 
@@ -125,19 +112,19 @@ class DifferentialTest {
                 // list cannot rot (a Jackson update flipping a verdict surfaces here). Value
                 // readers are NOT exercised — escaped-surrogate materialization rejection and
                 // BigDecimal range limits are reader-level policies, recorded elsewhere.
-                if (RECORDED_DIVERGENCE.contains(f.getName())) {
-                    if (!joltAccept) {
+                if (RECORDED_DIVERGENCE.contains(c.name())) {
+                    if (!c.accept()) {
                         // Recorded as reject (raw-byte strictness, BOM, empty docs):
                         // the rejection must persist.
-                        assertThrows(JsonParseException.class, () -> drainTokens(Jolt.parse(raw)),
-                                f.getName());
+                        assertThrows(JsonParseException.class,
+                                () -> CorpusSupport.tokens(Jolt.parse(c.bytes())), c.name());
                     } else {
-                        drainTokens(Jolt.parse(raw)); // token-level accept must persist
+                        CorpusSupport.tokens(Jolt.parse(c.bytes())); // token-level accept must persist
                     }
                     return;
                 }
-                assertEquals(canonicalJackson(jackson), canonicalJolt(Jolt.parse(raw)),
-                        f.getName() + ": canonical parses diverge");
+                assertEquals(canonicalJackson(jackson), canonicalJolt(Jolt.parse(c.bytes())),
+                        c.name() + ": canonical parses diverge");
             }));
         }
         return tests;
@@ -173,14 +160,6 @@ class DifferentialTest {
         return canonicalValue(parser, t);
     }
 
-    private static Token[] drainTokens(JoltParser parser) {
-        List<Token> out = new ArrayList<>();
-        Token t;
-        while ((t = parser.nextToken()) != Token.EOF) {
-            out.add(t);
-        }
-        return out.toArray(new Token[0]);
-    }
 
     /** Canonicalizes the value whose START/scalar token has already been consumed. */
     private static Object canonicalValue(JoltParser parser, Token t) throws IOException {
