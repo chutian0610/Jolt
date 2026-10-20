@@ -65,6 +65,26 @@ class JoltReuseTest {
     }
 
     @Test
+    void valueReadersStayCorrectAcrossResets() {
+        Utf8Parser p = Jolt.utf8Parser(utf8("{\"k\":\"first\",\"n\":7}"));
+        readAndAssert(p, "k", "first", 7);
+        p.reset(utf8("{\"k\":\"sec\\tond\",\"n\":-9223372036854775808}"));
+        readAndAssert(p, "k", "sec\tond", Long.MIN_VALUE);
+    }
+
+    private static void readAndAssert(Utf8Parser p, String key, String expectedText, long expectedLong) {
+        org.junit.jupiter.api.Assertions.assertEquals(Token.START_OBJECT, p.nextToken());
+        org.junit.jupiter.api.Assertions.assertEquals(Token.FIELD_NAME, p.nextToken());
+        org.junit.jupiter.api.Assertions.assertEquals(key, p.textValue());
+        org.junit.jupiter.api.Assertions.assertEquals(Token.VALUE_STRING, p.nextToken());
+        org.junit.jupiter.api.Assertions.assertEquals(expectedText, p.textValue());
+        org.junit.jupiter.api.Assertions.assertEquals(Token.FIELD_NAME, p.nextToken());
+        org.junit.jupiter.api.Assertions.assertEquals(Token.VALUE_NUMBER_INT, p.nextToken());
+        org.junit.jupiter.api.Assertions.assertEquals(expectedLong, p.longValue());
+        org.junit.jupiter.api.Assertions.assertEquals(Token.END_OBJECT, p.nextToken());
+    }
+
+    @Test
     void reusedInstanceMatchesFreshInstancesAcrossDocuments() {
         String[] docs = {"{\"a\":[1,-2.5e3,true,null]}", "[]", "123", "\"x\\ty\"", "{\"deep\":{\"deeper\":[[[1]]]}}"};
         Utf8Parser reused = Jolt.utf8Parser(utf8(docs[0]));

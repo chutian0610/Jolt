@@ -30,7 +30,7 @@ class ReuseCorpusTest {
 
     @TestFactory
     Iterable<DynamicTest> reuseConsistency() throws IOException {
-        File dir = corpusDir();
+        File dir = CorpusSupport.corpusDir();
         File[] corpus = dir.listFiles((d, name) -> name.startsWith("y_") && name.endsWith(".json"));
         if (corpus == null || corpus.length == 0) {
             throw new IllegalStateException("No y_ cases in corpus directory " + dir);
@@ -51,21 +51,16 @@ class ReuseCorpusTest {
 
     @TestFactory
     Iterable<DynamicTest> inputStreamMatchesBytesPath() throws IOException {
-        File dir = corpusDir();
-        File[] corpus = dir.listFiles((d, name) -> name.endsWith(".json"));
-        if (corpus == null) {
-            throw new IllegalStateException("Cannot list corpus directory " + dir);
+        File dir = CorpusSupport.corpusDir();
+        File[] corpus = dir.listFiles((d, name) -> name.matches("[yni]_.*\\.json"));
+        if (corpus == null || corpus.length == 0) {
+            throw new IllegalStateException("No corpus cases in directory " + dir);
         }
         Arrays.sort(corpus);
         List<DynamicTest> tests = new ArrayList<>();
         for (File f : corpus) {
             byte[] raw = Files.readAllBytes(f.toPath());
-            boolean expectAccept;
-            switch (f.getName().substring(0, 2)) {
-                case "y_" -> expectAccept = true;
-                case "n_" -> expectAccept = false;
-                default -> expectAccept = "accept".equals(manifestAccept(f.getName()));
-            }
+            boolean expectAccept = CorpusSupport.expectAccept(f.getName());
             tests.add(DynamicTest.dynamicTest("stream/" + f.getName(), () -> {
                 if (expectAccept) {
                     assertDoesNotThrow(() -> drain(Jolt.parse(new ByteArrayInputStream(raw))), f.getName());
@@ -80,22 +75,9 @@ class ReuseCorpusTest {
 
     private static byte[] firstCase(File[] corpus) throws IOException {
         for (File f : corpus) {
-            if (f.getName().startsWith("y_")) {
-                return Files.readAllBytes(f.toPath());
-            }
+            return Files.readAllBytes(f.toPath());
         }
-        return "{}".getBytes();
-    }
-
-    private static String manifestAccept(String name) {
-        try (java.io.InputStream in = ReuseCorpusTest.class
-                .getResourceAsStream("/jsontestsuite/i-manifest.properties")) {
-            java.util.Properties props = new java.util.Properties();
-            props.load(in);
-            return props.getProperty(name);
-        } catch (IOException e) {
-            throw new IllegalStateException(e);
-        }
+        throw new IllegalStateException("empty corpus");
     }
 
     private static Token[] tokens(io.github.chutian0610.jolt.JoltParser parser) {
@@ -111,13 +93,5 @@ class ReuseCorpusTest {
         while (parser.nextToken() != Token.EOF) {
             // consume
         }
-    }
-
-    private static File corpusDir() {
-        File dir = new File(System.getProperty("jolt.jsontestsuite.dir", ""));
-        if (!dir.isDirectory()) {
-            throw new IllegalStateException("JSONTestSuite corpus not found at " + dir);
-        }
-        return dir;
     }
 }
