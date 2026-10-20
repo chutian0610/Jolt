@@ -1,7 +1,6 @@
 package io.github.chutian0610.jolt;
 
 import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.Named;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -17,10 +16,10 @@ final class JoltTestSupport {
     /** The dual-engine parameter source: every value-semantics matrix replays on both adapters. */
     static Stream<Arguments> engines() {
         return Stream.of(
-                Arguments.of(Named.of("utf8", (BiFunction<String, Integer, JoltParser>)
-                        (s, depth) -> Jolt.parse(utf8(s), depth))),
-                Arguments.of(Named.of("utf16", (BiFunction<String, Integer, JoltParser>)
-                        (s, depth) -> Jolt.parse(s, depth))));
+                Arguments.of("utf8", (BiFunction<String, Integer, JoltParser>)
+                        (s, depth) -> Jolt.parse(utf8(s), depth)),
+                Arguments.of("utf16", (BiFunction<String, Integer, JoltParser>)
+                        (s, depth) -> Jolt.parse(s, depth)));
     }
 
     static byte[] utf8(String json) {
