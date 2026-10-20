@@ -36,4 +36,24 @@ public final class Jolt {
     public static JoltParser parse(String json, JoltConfig config) {
         return new Utf16Parser(json, config);
     }
+
+    /** Validates a UTF-8 document without exceptions: shared success sentinel, or diagnostics. */
+    public static ParseResult tryParse(byte[] json) {
+        return new Utf8Parser(json).drainOrFailure();
+    }
+
+    /** Validates a UTF-8 document under a configuration, without exceptions. */
+    public static ParseResult tryParse(byte[] json, JoltConfig config) {
+        return new Utf8Parser(json, config).drainOrFailure();
+    }
+
+    /** Validates a String document without exceptions: shared success sentinel, or diagnostics. */
+    public static ParseResult tryParse(String json) {
+        return new Utf16Parser(json).drainOrFailure();
+    }
+
+    /** Validates a String document under a configuration, without exceptions. */
+    public static ParseResult tryParse(String json, JoltConfig config) {
+        return new Utf16Parser(json, config).drainOrFailure();
+    }
 }

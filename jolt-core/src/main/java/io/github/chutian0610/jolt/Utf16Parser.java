@@ -9,8 +9,9 @@ import java.util.Arrays;
  * bridge (no UTF-8 round-trip). The input String is expanded to a char[] once at construction
  * (Java 9+ compact strings offer no public zero-copy path, and reflection into String internals
  * is forbidden by ADR-0003); after that, scanning and clean-string materialization never
- * transcode or re-buffer. Instances are mutable, reusable for one document at a time, and not
- * thread-safe.
+ * transcode or re-buffer. Failures propagate internally as an error code (fast return, no
+ * throws); the {@link JsonParseException} materializes only at the public API boundary
+ * (ADR-0005). Instances are mutable, reusable for one document at a time, and not thread-safe.
  */
 public final class Utf16Parser implements JoltParser {
 
@@ -31,7 +32,7 @@ public final class Utf16Parser implements JoltParser {
     private final char[] json;
     private final int maxDepth;
     // Lenient features (ADR-0001): final per-instance flags, individually opt-in; a disabled
-    // feature's branch is never taken and the JIT specializes it away.
+    // feature's branch is never taken.
     private final boolean comments;
     private final boolean trailingCommas;
     // Grown on demand (doubling, capped at maxDepth) so a huge configured limit never
@@ -54,6 +55,11 @@ public final class Utf16Parser implements JoltParser {
     private boolean stringHasEscape;
     // Reused decode buffer for escaped strings; grows on demand, never per parse.
     private char[] scratch;
+
+    // Error code (ADR-0005): the ONLY internal failure representation — a detail string plus
+    // offset, written solely on the failure path; the exception materializes at the boundary.
+    private String errorDetail;
+    private int errorOffset;
 
     Utf16Parser(String json) {
         this(json, JoltParser.DEFAULT_MAX_DEPTH, 0);
@@ -78,9 +84,16 @@ public final class Utf16Parser implements JoltParser {
         this.containerStack = new byte[Math.min(maxDepth, 16)];
     }
 
-    /** Advances to and returns the next token; {@link Token#EOF} once the document is exhausted. */
+    /**
+     * Advances to and returns the next token; {@link Token#EOF} once the document is exhausted.
+     * This is the boundary where the internal error code materializes as a
+     * {@link JsonParseException} (ADR-0005).
+     */
     public Token nextToken() {
         Token t = nextTokenInternal();
+        if (t == null) {
+            throw new JsonParseException(errorDetail, json, errorOffset);
+        }
         lastToken = t;
         lastTokenStart = tokenStart;
         return t;
@@ -98,20 +111,22 @@ public final class Utf16Parser implements JoltParser {
                 if (state == ST_TOP_DONE) {
                     return Token.EOF;
                 }
-                throw error("Unexpected end of input");
+                return failToken("Unexpected end of input");
             }
             char c = json[pos];
             pos++;
             switch (c) {
                 case '{' -> {
-                    requireValuePosition(c);
-                    push(OBJECT);
+                    if (!requireValuePosition(c) || !push(OBJECT)) {
+                        return null;
+                    }
                     state = ST_OBJ_KEY_OR_END;
                     return Token.START_OBJECT;
                 }
                 case '[' -> {
-                    requireValuePosition(c);
-                    push(ARRAY);
+                    if (!requireValuePosition(c) || !push(ARRAY)) {
+                        return null;
+                    }
                     state = ST_ARR_VALUE_OR_END;
                     return Token.START_ARRAY;
                 }
@@ -123,46 +138,53 @@ public final class Utf16Parser implements JoltParser {
                 }
                 case ',' -> {
                     if (state != ST_AFTER) {
-                        throw error("',' not allowed here");
+                        return failToken("',' not allowed here");
                     }
                     state = (top() == OBJECT) ? ST_OBJ_KEY : ST_VALUE;
                     continue;
                 }
                 case ':' -> {
                     if (state != ST_COLON) {
-                        throw error("':' not allowed here");
+                        return failToken("':' not allowed here");
                     }
                     state = ST_VALUE;
                     continue;
                 }
                 case '"' -> {
                     if (state == ST_OBJ_KEY_OR_END || state == ST_OBJ_KEY) {
-                        scanStringSpan();
+                        if (!scanStringSpan()) {
+                            return null;
+                        }
                         state = ST_COLON;
                         return Token.FIELD_NAME;
                     }
                     if (isValuePosition()) {
-                        scanStringSpan();
+                        if (!scanStringSpan()) {
+                            return null;
+                        }
                         state = afterValue();
                         return Token.VALUE_STRING;
                     }
-                    throw error("'\"' not allowed here");
+                    return failToken("'\"' not allowed here");
                 }
                 case 't' -> {
-                    requireValuePosition(c);
-                    scanLiteral("true");
+                    if (!requireValuePosition(c) || !scanLiteral("true")) {
+                        return null;
+                    }
                     state = afterValue();
                     return Token.VALUE_TRUE;
                 }
                 case 'f' -> {
-                    requireValuePosition(c);
-                    scanLiteral("false");
+                    if (!requireValuePosition(c) || !scanLiteral("false")) {
+                        return null;
+                    }
                     state = afterValue();
                     return Token.VALUE_FALSE;
                 }
                 case 'n' -> {
-                    requireValuePosition(c);
-                    scanLiteral("null");
+                    if (!requireValuePosition(c) || !scanLiteral("null")) {
+                        return null;
+                    }
                     state = afterValue();
                     return Token.VALUE_NULL;
                 }
@@ -170,18 +192,37 @@ public final class Utf16Parser implements JoltParser {
                     // Only reachable as a comment opener; strict mode rejects here with the
                     // same branch it would otherwise never take.
                     if (!comments) {
-                        throw error("Unexpected character");
+                        return failToken("Unexpected character");
                     }
-                    skipComment();
+                    if (!skipComment()) {
+                        return null;
+                    }
                     continue;
                 }
                 default -> {
                     if ((c >= '0' && c <= '9') || c == '-') {
-                        requireValuePosition(c);
-                        return scanNumber() ? Token.VALUE_NUMBER_FLOAT : Token.VALUE_NUMBER_INT;
+                        if (!requireValuePosition(c)) {
+                            return null;
+                        }
+                        int kind = scanNumber();
+                        return kind < 0 ? null
+                                : kind == 1 ? Token.VALUE_NUMBER_FLOAT : Token.VALUE_NUMBER_INT;
                     }
-                    throw error("Unexpected character");
+                    return failToken("Unexpected character");
                 }
+            }
+        }
+    }
+
+    /** Drains to EOF for the tryParse facade; never throws. */
+    ParseResult drainOrFailure() {
+        while (true) {
+            Token t = nextTokenInternal();
+            if (t == null) {
+                return ParseResult.failure(new JsonParseException(errorDetail, json, errorOffset));
+            }
+            if (t == Token.EOF) {
+                return ParseResult.success();
             }
         }
     }
@@ -229,22 +270,27 @@ public final class Utf16Parser implements JoltParser {
                         if (p + 6 <= valueEnd && json[p] == '\\' && json[p + 1] == 'u') {
                             int low = hex4(p + 2);
                             if (low < 0xDC00 || low > 0xDFFF) {
-                                throw error("unpaired surrogate escape in string");
+                                throw materializationError("unpaired surrogate escape in string");
                             }
                             p += 6;
                             cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
                         } else {
-                            throw error("unpaired surrogate escape in string");
+                            throw materializationError("unpaired surrogate escape in string");
                         }
                     } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
-                        throw error("lone low surrogate escape in string");
+                        throw materializationError("lone low surrogate escape in string");
                     }
                     out = encodeChar(cp, out);
                 }
-                default -> throw error("invalid escape in string"); // unreachable: scan-time validation
+                default -> throw materializationError("invalid escape in string"); // scan validated
             }
         }
         return new String(scratch, 0, out);
+    }
+
+    /** A boundary exception thrown from a value reader (a materialization-time failure). */
+    private JsonParseException materializationError(String detail) {
+        return new JsonParseException(detail, json, valueStart);
     }
 
     /** Reads 4 already-validated hex digits at {@code p} as a code unit. */
@@ -425,17 +471,16 @@ public final class Utf16Parser implements JoltParser {
         return state == ST_TOP_VALUE || state == ST_VALUE || state == ST_ARR_VALUE_OR_END;
     }
 
-    private void requireValuePosition(char c) {
-        if (!isValuePosition()) {
-            throw error("value not allowed here (char '" + c + "')");
-        }
+    private boolean requireValuePosition(char c) {
+        return isValuePosition()
+                || fail("value not allowed here (char '" + c + "')");
     }
 
     private int afterValue() {
         return (depth == 0) ? ST_TOP_AFTER : ST_AFTER;
     }
 
-    /** Closes the current container if the grammar allows it here; otherwise fails. */
+    /** Closes the current container if the grammar allows it here; null on failure. */
     private Token closeContainer(char container, Token endToken, String what) {
         boolean atOpen = (container == OBJECT)
                 ? state == ST_OBJ_KEY_OR_END
@@ -452,12 +497,12 @@ public final class Utf16Parser implements JoltParser {
             pop();
             return endToken;
         }
-        throw error(what + " not allowed here");
+        return failToken(what + " not allowed here");
     }
 
-    private void push(char container) {
+    private boolean push(char container) {
         if (depth == maxDepth) {
-            throw error("nesting depth exceeds limit " + maxDepth);
+            return fail("nesting depth exceeds limit " + maxDepth);
         }
         if (depth == containerStack.length) {
             containerStack = Arrays.copyOf(containerStack,
@@ -465,6 +510,7 @@ public final class Utf16Parser implements JoltParser {
         }
         containerStack[depth] = (byte) container;
         depth++;
+        return true;
     }
 
     private void pop() {
@@ -478,35 +524,8 @@ public final class Utf16Parser implements JoltParser {
 
     // --- scanners ---
 
-    /** Skips a comment; the cursor sits just past the consumed '/'. */
-    private void skipComment() {
-        if (pos >= json.length) {
-            throw error("unterminated comment");
-        }
-        char c = json[pos];
-        if (c == '/') {
-            while (pos < json.length && json[pos] != '\n') {
-                pos++;
-            }
-            return; // the newline (or EOF) is handled by whitespace skipping on the next round
-        }
-        if (c == '*') {
-            pos++;
-            while (true) {
-                if (pos + 1 >= json.length) {
-                    throw error("unterminated comment");
-                }
-                if (json[pos] == '*' && json[pos + 1] == '/') {
-                    pos += 2;
-                    return;
-                }
-                pos++;
-            }
-        }
-        throw error("malformed comment");
-    }
-
-    private void scanStringSpan() {
+    /** Scans a string span; false (with the error code set) on any violation. */
+    private boolean scanStringSpan() {
         stringHasEscape = false;
         valueStart = pos;
         while (pos < json.length) {
@@ -514,15 +533,17 @@ public final class Utf16Parser implements JoltParser {
             if (c == '"') {
                 valueEnd = pos;
                 pos++; // closing quote
-                return;
+                return true;
             }
             if (c == '\\') {
                 stringHasEscape = true;
-                validateEscape();
+                if (!validateEscape()) {
+                    return false;
+                }
                 continue;
             }
             if (c < 0x20) {
-                throw error("raw control character in string");
+                return fail("raw control character in string");
             }
             if (c >= 0xD800) {
                 // Surrogate pairing is checked at scan time, mirroring the UTF-8 engine's
@@ -530,73 +551,76 @@ public final class Utf16Parser implements JoltParser {
                 if (c <= 0xDBFF) {
                     // c is the high surrogate at pos; the low surrogate must follow at pos+1.
                     if (pos + 1 >= json.length || json[pos + 1] < 0xDC00 || json[pos + 1] > 0xDFFF) {
-                        throw error("unpaired surrogate in string");
+                        return fail("unpaired surrogate in string");
                     }
                     pos += 2; // high + low
                     continue;
                 }
                 if (c <= 0xDFFF) {
-                    throw error("unpaired low surrogate in string");
+                    return fail("unpaired low surrogate in string");
                 }
             }
             pos++;
         }
-        throw error("unterminated string");
+        return fail("unterminated string");
     }
 
     /** Validates an escape sequence; the cursor sits on the backslash. */
-    private void validateEscape() {
+    private boolean validateEscape() {
         pos++; // past backslash
         if (pos >= json.length) {
-            throw error("unterminated escape");
+            return fail("unterminated escape");
         }
         char e = json[pos++];
         switch (e) {
             case '"', '\\', '/', 'b', 'f', 'n', 'r', 't' -> {
-                return;
+                return true;
             }
             case 'u' -> {
                 for (int i = 0; i < 4; i++) {
                     if (pos >= json.length) {
-                        throw error("truncated \\u escape");
+                        return fail("truncated \\u escape");
                     }
                     char h = json[pos++];
                     boolean isHexDigit = (h >= '0' && h <= '9') || (h >= 'a' && h <= 'f') || (h >= 'A' && h <= 'F');
                     if (!isHexDigit) {
-                        throw error("invalid hex digit in \\u escape");
+                        return fail("invalid hex digit in \\u escape");
                     }
                 }
-                return;
+                return true;
             }
-            default -> throw error("invalid escape '\\" + e + "'");
+            default -> {
+                return fail("invalid escape '\\" + e + "'");
+            }
         }
     }
 
-    private void scanLiteral(String literal) {
+    private boolean scanLiteral(String literal) {
         int len = literal.length();
         for (int i = 1; i < len; i++) {
             if (pos >= json.length || json[pos] != literal.charAt(i)) {
-                throw error("invalid literal, expected '" + literal + "'");
+                return fail("invalid literal, expected '" + literal + "'");
             }
             pos++;
         }
         valueStart = pos - len;
         valueEnd = pos;
+        return true;
     }
 
     /**
-     * Scans an RFC 8259 number starting at the already-consumed first char; returns true when the
-     * number has a fraction or exponent (a float form). Rejects leading zeros, missing digits
-     * around '.'/'e', and everything else the grammar forbids.
+     * Scans an RFC 8259 number starting at the already-consumed first char: 1 for a float form,
+     * 0 for an integer form, -1 (with the error code set) on any grammar violation. Rejects
+     * leading zeros and missing digits around '.'/'e'.
      */
-    private boolean scanNumber() {
+    private int scanNumber() {
         int start = pos - 1;
         int p = start;
         if (json[p] == '-') {
             p++;
         }
         if (p >= json.length) {
-            throw error("digit required after '-'");
+            return failInt("digit required after '-'");
         }
         if (json[p] == '0') {
             p++; // a leading zero is never followed by more integer digits
@@ -605,14 +629,14 @@ public final class Utf16Parser implements JoltParser {
                 p++;
             }
         } else {
-            throw error("digit required in number");
+            return failInt("digit required in number");
         }
         boolean isFloat = false;
         if (p < json.length && json[p] == '.') {
             isFloat = true;
             p++;
             if (p >= json.length || !isDigit(json[p])) {
-                throw error("digit required after '.'");
+                return failInt("digit required after '.'");
             }
             while (p < json.length && isDigit(json[p])) {
                 p++;
@@ -625,7 +649,7 @@ public final class Utf16Parser implements JoltParser {
                 p++;
             }
             if (p >= json.length || !isDigit(json[p])) {
-                throw error("digit required in exponent");
+                return failInt("digit required in exponent");
             }
             while (p < json.length && isDigit(json[p])) {
                 p++;
@@ -635,7 +659,35 @@ public final class Utf16Parser implements JoltParser {
         valueEnd = p;
         pos = p;
         state = afterValue();
-        return isFloat;
+        return isFloat ? 1 : 0;
+    }
+
+    /** Skips a comment; the cursor sits just past the consumed '/'. */
+    private boolean skipComment() {
+        if (pos >= json.length) {
+            return fail("unterminated comment");
+        }
+        char c = json[pos];
+        if (c == '/') {
+            while (pos < json.length && json[pos] != '\n') {
+                pos++;
+            }
+            return true; // the newline (or EOF) is handled by whitespace skipping on the next round
+        }
+        if (c == '*') {
+            pos++;
+            while (true) {
+                if (pos + 1 >= json.length) {
+                    return fail("unterminated comment");
+                }
+                if (json[pos] == '*' && json[pos + 1] == '/') {
+                    pos += 2;
+                    return true;
+                }
+                pos++;
+            }
+        }
+        return fail("malformed comment");
     }
 
     private static boolean isDigit(char c) {
@@ -653,7 +705,21 @@ public final class Utf16Parser implements JoltParser {
         }
     }
 
-    private JsonParseException error(String detail) {
-        return new JsonParseException(detail + " at offset " + Math.max(0, pos - 1));
+    // --- error-code plumbing (ADR-0005) ---
+
+    private boolean fail(String detail) {
+        errorDetail = detail;
+        errorOffset = Math.max(0, pos - 1);
+        return false;
+    }
+
+    private Token failToken(String detail) {
+        fail(detail);
+        return null;
+    }
+
+    private int failInt(String detail) {
+        fail(detail);
+        return -1;
     }
 }
