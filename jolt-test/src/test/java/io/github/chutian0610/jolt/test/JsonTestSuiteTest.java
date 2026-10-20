@@ -67,7 +67,16 @@ class JsonTestSuiteTest {
         switch (caseName.substring(0, 2)) {
             case "y_" -> expectAccept = true;
             case "n_" -> expectAccept = false;
-            default -> expectAccept = "accept".equals(manifest().getProperty(caseName));
+            default -> {
+                String recorded = manifest().getProperty(caseName);
+                if (!"accept".equals(recorded) && !"reject".equals(recorded)) {
+                    // The manifest is a regression contract: a mistyped value must fail loudly,
+                    // never silently count as rejection.
+                    throw new IllegalStateException(
+                            "Unknown manifest value '" + recorded + "' for " + caseName);
+                }
+                expectAccept = "accept".equals(recorded);
+            }
         }
         JoltParser parser;
         if (asString) {

@@ -113,4 +113,19 @@ class JoltParityTest {
         assertEquals(Token.FIELD_NAME, p.nextToken());
         assertEquals("b", p.textValue());
     }
+
+    /**
+     * Raw lone surrogates are rejected symmetrically: the UTF-8 engine rejects their byte
+     * encoding at scan time (JoltStringRulesTest), the UTF-16 engine rejects the unpaired char.
+     * Escaped forms (\uD800) keep the token-level accept / materialization-reject policy.
+     */
+    @org.junit.jupiter.api.Test
+    void utf16RejectsRawLoneSurrogatesLikeUtf8RejectsTheirEncoding() {
+        assertThrows(JsonParseException.class,
+                () -> Jolt.parse(new String(new char[]{'"', 0xD800, '"'})));
+        assertThrows(JsonParseException.class,
+                () -> Jolt.parse(new String(new char[]{'"', 'a', 0xDC00, 'b', '"'})));
+        // A well-formed pair passes.
+        assertDoesNotThrow(() -> drain(Jolt.parse(new String(new char[]{'"', 0xD83D, 0xDE00, '"'}))));
+    }
 }

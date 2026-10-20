@@ -171,7 +171,7 @@ public final class Utf16Parser implements JoltParser {
      */
     public String textValue() {
         if (!stringHasEscape) {
-            return new String(json, valueStart, valueEnd - valueStart);
+            return rawText();
         }
         return unescapeIntoScratch();
     }
@@ -465,8 +465,21 @@ public final class Utf16Parser implements JoltParser {
             if (c < 0x20) {
                 throw error("raw control character in string");
             }
+            if (c >= 0xD800) {
+                // Surrogate pairing is checked at scan time, mirroring the UTF-8 engine's
+                // byte-level rejection of encoded surrogates: same error semantics.
+                if (c <= 0xDBFF) {
+                    if (pos >= json.length || json[pos] < 0xDC00 || json[pos] > 0xDFFF) {
+                        throw error("unpaired surrogate in string");
+                    }
+                    pos += 2; // high + low
+                    continue;
+                }
+                if (c <= 0xDFFF) {
+                    throw error("unpaired low surrogate in string");
+                }
+            }
             pos++;
-            // Chars >= 0x80 pass through unvalidated: UTF-16 has no byte-level encoding to check.
         }
         throw error("unterminated string");
     }

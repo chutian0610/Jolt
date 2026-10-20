@@ -10,6 +10,8 @@ import java.math.BigDecimal;
  * semantics, with no transcoding bridge between them.
  *
  * <p>Implementations are mutable, reusable for one document at a time, and not thread-safe.
+ * Offsets reported in error messages are byte offsets in the UTF-8 engine and char offsets in
+ * the UTF-16 engine — engine-local units, identical semantics.
  */
 public interface JoltParser {
 

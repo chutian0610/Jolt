@@ -453,7 +453,7 @@ public final class Utf8Parser implements JoltParser {
         return containerStack[depth - 1];
     }
 
-    // --- scanners (grammar tightened in later slices) ---
+    // --- scanners ---
 
     private void scanStringSpan() {
         stringHasEscape = false;
