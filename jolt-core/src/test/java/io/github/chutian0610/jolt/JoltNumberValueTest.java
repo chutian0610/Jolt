@@ -1,14 +1,12 @@
 package io.github.chutian0610.jolt;
 
-import org.junit.jupiter.api.Named;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.math.BigDecimal;
 import java.util.function.BiFunction;
-import java.util.stream.Stream;
 
+import static io.github.chutian0610.jolt.JoltTestSupport.engines;
 import static io.github.chutian0610.jolt.JoltTestSupport.utf8;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -19,14 +17,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * drift in one engine's copy of the number arithmetic fails here, loudly.
  */
 class JoltNumberValueTest {
-
-    static Stream<Arguments> engines() {
-        return Stream.of(
-                Arguments.of(Named.of("utf8", (BiFunction<String, Integer, JoltParser>)
-                        (s, depth) -> Jolt.parse(utf8(s), depth))),
-                Arguments.of(Named.of("utf16", (BiFunction<String, Integer, JoltParser>)
-                        (s, depth) -> Jolt.parse(s, depth))));
-    }
 
     private static JoltParser atValue(BiFunction<String, Integer, JoltParser> parse, String json) {
         JoltParser parser = parse.apply(json, 512);
