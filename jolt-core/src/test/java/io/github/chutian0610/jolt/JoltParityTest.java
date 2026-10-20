@@ -121,10 +121,11 @@ class JoltParityTest {
      */
     @org.junit.jupiter.api.Test
     void utf16RejectsRawLoneSurrogatesLikeUtf8RejectsTheirEncoding() {
+        // Jolt.parse is lazy: tokens are scanned on nextToken, so the assertions must drain.
         assertThrows(JsonParseException.class,
-                () -> Jolt.parse(new String(new char[]{'"', 0xD800, '"'})));
+                () -> drain(Jolt.parse(new String(new char[]{'"', 0xD800, '"'}))));
         assertThrows(JsonParseException.class,
-                () -> Jolt.parse(new String(new char[]{'"', 'a', 0xDC00, 'b', '"'})));
+                () -> drain(Jolt.parse(new String(new char[]{'"', 'a', 0xDC00, 'b', '"'}))));
         // A well-formed pair passes.
         assertDoesNotThrow(() -> drain(Jolt.parse(new String(new char[]{'"', 0xD83D, 0xDE00, '"'}))));
     }

@@ -469,7 +469,8 @@ public final class Utf16Parser implements JoltParser {
                 // Surrogate pairing is checked at scan time, mirroring the UTF-8 engine's
                 // byte-level rejection of encoded surrogates: same error semantics.
                 if (c <= 0xDBFF) {
-                    if (pos >= json.length || json[pos] < 0xDC00 || json[pos] > 0xDFFF) {
+                    // c is the high surrogate at pos; the low surrogate must follow at pos+1.
+                    if (pos + 1 >= json.length || json[pos + 1] < 0xDC00 || json[pos + 1] > 0xDFFF) {
                         throw error("unpaired surrogate in string");
                     }
                     pos += 2; // high + low
