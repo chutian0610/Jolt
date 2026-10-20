@@ -117,6 +117,28 @@ class JsonTestSuiteTest {
                 "manifest and corpus disagree — update the manifest deliberately, not silently");
     }
 
+    /**
+     * Matrix cell {comments+trailing commas ON} × corpus: lenient mode is a strict superset, so
+     * every y_ case must still parse under both switches on (n_ behavior may legitimately shift
+     * and is not pinned here).
+     */
+    @Test
+    void yCasesStillAcceptedUnderBothLenientSwitches() throws IOException {
+        io.github.chutian0610.jolt.JoltConfig lenient = io.github.chutian0610.jolt.JoltConfig.strict()
+                .withComments().withTrailingCommas();
+        File dir = corpusDir();
+        File[] corpus = dir.listFiles((d, name) -> name.startsWith("y_") && name.endsWith(".json"));
+        if (corpus == null) {
+            throw new IllegalStateException("Cannot list corpus directory " + dir);
+        }
+        for (File f : corpus) {
+            byte[] raw = read(f);
+            assertDoesNotThrow(() -> drain(Jolt.parse(raw, lenient)), "lenient/bytes: " + f.getName());
+            assertDoesNotThrow(() -> drain(Jolt.parse(decodeStrict(raw), lenient)),
+                    "lenient/string: " + f.getName());
+        }
+    }
+
     private static File corpusDir() {
         File dir = new File(System.getProperty("jolt.jsontestsuite.dir", ""));
         if (!dir.isDirectory()) {

@@ -25,7 +25,7 @@ import java.nio.charset.StandardCharsets;
 @State(Scope.Benchmark)
 @Warmup(iterations = 3, time = 1)
 @Measurement(iterations = 5, time = 1)
-@Fork(1)
+@Fork(3)
 public class StrictParityBenchmark {
 
     private byte[] json;

@@ -2,8 +2,9 @@ package io.github.chutian0610.jolt;
 
 /**
  * Explicit configuration for lenient features (ADR-0001): each feature is individually opt-in
- * and a disabled feature costs zero — its checks live behind final per-instance flags the JIT
- * specializes away, never interleaved with strict scanning. The default is strict RFC 8259.
+ * and a disabled feature costs zero — its only footprint is a never-taken branch on a final
+ * per-instance flag (predicted away by the JIT), never an interleaved check in strict
+ * scanning. The default is strict RFC 8259.
  *
  * <p>Immutable; start from {@link #strict()} and chain {@code withXxx()} calls.
  */
@@ -28,7 +29,8 @@ public final class JoltConfig {
         return new JoltConfig(0, JoltParser.DEFAULT_MAX_DEPTH);
     }
 
-    /** Enables {@code // line} and {@code /* block * @} comments between tokens. */
+    /** Enables {@code // line} and {@code /* block * @} comments between tokens. Line comments
+     * end at the next {@code \n} (a preceding {@code \r} is part of the comment). */
     public JoltConfig withComments() {
         return new JoltConfig(features | F_COMMENTS, maxDepth);
     }
