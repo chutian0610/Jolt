@@ -25,15 +25,15 @@ class JoltNumberValueTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("engines")
-    void longValueParsesInPlaceNeverThroughDouble(BiFunction<String, Integer, JoltParser> parse) {
+    @MethodSource("io.github.chutian0610.jolt.JoltTestSupport#engines")
+    void longValueParsesInPlaceNeverThroughDouble(String engine, BiFunction<String, Integer, JoltParser> parse) {
         // 2^53 + 1: not representable as a double; must survive exactly on the long path.
         assertEquals(9007199254740993L, atValue(parse, "9007199254740993").longValue());
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("engines")
-    void longValueHandlesRangeExtremes(BiFunction<String, Integer, JoltParser> parse) {
+    @MethodSource("io.github.chutian0610.jolt.JoltTestSupport#engines")
+    void longValueHandlesRangeExtremes(String engine, BiFunction<String, Integer, JoltParser> parse) {
         assertEquals(Long.MAX_VALUE, atValue(parse, "9223372036854775807").longValue());
         assertEquals(Long.MIN_VALUE, atValue(parse, "-9223372036854775808").longValue());
         assertEquals(0L, atValue(parse, "0").longValue());
@@ -42,15 +42,15 @@ class JoltNumberValueTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("engines")
-    void longValueOverflowThrows(BiFunction<String, Integer, JoltParser> parse) {
+    @MethodSource("io.github.chutian0610.jolt.JoltTestSupport#engines")
+    void longValueOverflowThrows(String engine, BiFunction<String, Integer, JoltParser> parse) {
         assertThrows(ArithmeticException.class, () -> atValue(parse, "9223372036854775808").longValue());
         assertThrows(ArithmeticException.class, () -> atValue(parse, "-9223372036854775809").longValue());
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("engines")
-    void longValueInsideDocuments(BiFunction<String, Integer, JoltParser> parse) {
+    @MethodSource("io.github.chutian0610.jolt.JoltTestSupport#engines")
+    void longValueInsideDocuments(String engine, BiFunction<String, Integer, JoltParser> parse) {
         JoltParser parser = parse.apply("{\"a\":123,\"b\":[456]}", 512);
         assertEquals(Token.START_OBJECT, parser.nextToken());
         assertEquals(Token.FIELD_NAME, parser.nextToken());
@@ -63,24 +63,24 @@ class JoltNumberValueTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("engines")
-    void numberTextReturnsUntouchedSource(BiFunction<String, Integer, JoltParser> parse) {
+    @MethodSource("io.github.chutian0610.jolt.JoltTestSupport#engines")
+    void numberTextReturnsUntouchedSource(String engine, BiFunction<String, Integer, JoltParser> parse) {
         assertEquals("1.50e2", atValue(parse, "1.50e2").numberText());
         assertEquals("-0.0", atValue(parse, "-0.0").numberText());
         assertEquals("42", atValue(parse, "42").numberText());
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("engines")
-    void integerWithinLongRangeStaysLong(BiFunction<String, Integer, JoltParser> parse) {
+    @MethodSource("io.github.chutian0610.jolt.JoltTestSupport#engines")
+    void integerWithinLongRangeStaysLong(String engine, BiFunction<String, Integer, JoltParser> parse) {
         assertEquals(Long.class, atValue(parse, "-42").numberValue().getClass());
         assertEquals(-42L, atValue(parse, "-42").numberValue());
         assertEquals(9007199254740993L, atValue(parse, "9007199254740993").numberValue());
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("engines")
-    void integerOverflowPromotesToBigDecimalExactly(BiFunction<String, Integer, JoltParser> parse) {
+    @MethodSource("io.github.chutian0610.jolt.JoltTestSupport#engines")
+    void integerOverflowPromotesToBigDecimalExactly(String engine, BiFunction<String, Integer, JoltParser> parse) {
         Number n = atValue(parse, "9223372036854775808").numberValue();
         assertEquals(new BigDecimal("9223372036854775808"), n);
         Number neg = atValue(parse, "-9223372036854775809").numberValue();
@@ -88,8 +88,8 @@ class JoltNumberValueTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("engines")
-    void ordinaryFloatStaysDouble(BiFunction<String, Integer, JoltParser> parse) {
+    @MethodSource("io.github.chutian0610.jolt.JoltTestSupport#engines")
+    void ordinaryFloatStaysDouble(String engine, BiFunction<String, Integer, JoltParser> parse) {
         assertEquals(Double.class, atValue(parse, "1.5").numberValue().getClass());
         assertEquals(1.5, atValue(parse, "1.5").numberValue().doubleValue());
         assertEquals(0.1, atValue(parse, "0.1").numberValue().doubleValue());
@@ -99,8 +99,8 @@ class JoltNumberValueTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("engines")
-    void precisionHungryFloatPromotesToBigDecimal(BiFunction<String, Integer, JoltParser> parse) {
+    @MethodSource("io.github.chutian0610.jolt.JoltTestSupport#engines")
+    void precisionHungryFloatPromotesToBigDecimal(String engine, BiFunction<String, Integer, JoltParser> parse) {
         Number n = atValue(parse, "0.1000000000000000000001").numberValue();
         assertEquals(new BigDecimal("0.1000000000000000000001"), n);
         Number long18 = atValue(parse, "1.23456789012345678").numberValue();
@@ -108,8 +108,8 @@ class JoltNumberValueTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("engines")
-    void doubleOverflowPromotesToBigDecimal(BiFunction<String, Integer, JoltParser> parse) {
+    @MethodSource("io.github.chutian0610.jolt.JoltTestSupport#engines")
+    void doubleOverflowPromotesToBigDecimal(String engine, BiFunction<String, Integer, JoltParser> parse) {
         Number n = atValue(parse, "1e309").numberValue();
         assertEquals(new BigDecimal("1e309"), n);
         Number neg = atValue(parse, "-1e309").numberValue();
@@ -119,8 +119,8 @@ class JoltNumberValueTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("engines")
-    void doubleValueReadsFloatsAndInts(BiFunction<String, Integer, JoltParser> parse) {
+    @MethodSource("io.github.chutian0610.jolt.JoltTestSupport#engines")
+    void doubleValueReadsFloatsAndInts(String engine, BiFunction<String, Integer, JoltParser> parse) {
         assertEquals(1.5, atValue(parse, "1.5").doubleValue());
         assertEquals(100.0, atValue(parse, "1e2").doubleValue());
         assertEquals(42.0, atValue(parse, "42").doubleValue());
@@ -128,8 +128,8 @@ class JoltNumberValueTest {
     }
 
     @ParameterizedTest(name = "{0}")
-    @MethodSource("engines")
-    void bigDecimalValueIsExactForAnyForm(BiFunction<String, Integer, JoltParser> parse) {
+    @MethodSource("io.github.chutian0610.jolt.JoltTestSupport#engines")
+    void bigDecimalValueIsExactForAnyForm(String engine, BiFunction<String, Integer, JoltParser> parse) {
         assertEquals(new BigDecimal("0.1"), atValue(parse, "0.1").bigDecimalValue());
         assertEquals(new BigDecimal("-123.45e2"), atValue(parse, "-123.45e2").bigDecimalValue());
         assertEquals(new BigDecimal("42"), atValue(parse, "42").bigDecimalValue());
