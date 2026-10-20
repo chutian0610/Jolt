@@ -12,10 +12,90 @@ public class JsonParseException extends RuntimeException {
 
     private static final long serialVersionUID = 1L;
 
+    /**
+     * One document form as a diagnostic source. Adding a value source (M2: tree nodes,
+     * streaming buffers) means one implementation and one constructor — never another branch.
+     */
+    private interface Input {
+        int length();
+
+        char charAt(int i);
+
+        /** The document text in [start, end), decoded per the form's own units. */
+        String text(int start, int end);
+    }
+
+    private static final class BytesInput implements Input {
+        private final byte[] json;
+
+        BytesInput(byte[] json) {
+            this.json = json;
+        }
+
+        @Override
+        public int length() {
+            return json.length;
+        }
+
+        @Override
+        public char charAt(int i) {
+            return (char) (json[i] & 0xFF);
+        }
+
+        @Override
+        public String text(int start, int end) {
+            return new String(json, start, end - start, StandardCharsets.UTF_8);
+        }
+    }
+
+    private static final class CharsInput implements Input {
+        private final char[] json;
+
+        CharsInput(char[] json) {
+            this.json = json;
+        }
+
+        @Override
+        public int length() {
+            return json.length;
+        }
+
+        @Override
+        public char charAt(int i) {
+            return json[i];
+        }
+
+        @Override
+        public String text(int start, int end) {
+            return new String(json, start, end - start);
+        }
+    }
+
+    private static final class TextInput implements Input {
+        private final String json;
+
+        TextInput(String json) {
+            this.json = json;
+        }
+
+        @Override
+        public int length() {
+            return json.length();
+        }
+
+        @Override
+        public char charAt(int i) {
+            return json.charAt(i);
+        }
+
+        @Override
+        public String text(int start, int end) {
+            return json.substring(start, end);
+        }
+    }
+
     private final String detail;
-    private final transient byte[] jsonBytes; // exactly one of the three input forms is set
-    private final transient String jsonText;
-    private final transient char[] jsonChars;
+    private final transient Input input; // null in the detail-only / deserialized form
     private final int offset;
 
     // Lazy, cached diagnostics (offset >= 0 only). A boolean gate — not a -1 sentinel —
@@ -31,9 +111,7 @@ public class JsonParseException extends RuntimeException {
     public JsonParseException(String detail) {
         super(detail);
         this.detail = detail;
-        this.jsonBytes = null;
-        this.jsonText = null;
-        this.jsonChars = null;
+        this.input = null;
         this.offset = -1;
     }
 
@@ -41,9 +119,7 @@ public class JsonParseException extends RuntimeException {
     public JsonParseException(String detail, byte[] json, int offset) {
         super((String) null);
         this.detail = detail;
-        this.jsonBytes = json;
-        this.jsonText = null;
-        this.jsonChars = null;
+        this.input = new BytesInput(json);
         this.offset = offset;
     }
 
@@ -51,9 +127,7 @@ public class JsonParseException extends RuntimeException {
     public JsonParseException(String detail, char[] json, int offset) {
         super((String) null);
         this.detail = detail;
-        this.jsonBytes = null;
-        this.jsonText = null;
-        this.jsonChars = json;
+        this.input = new CharsInput(json);
         this.offset = offset;
     }
 
@@ -61,9 +135,7 @@ public class JsonParseException extends RuntimeException {
     public JsonParseException(String detail, String json, int offset) {
         super((String) null);
         this.detail = detail;
-        this.jsonBytes = null;
-        this.jsonText = json;
-        this.jsonChars = null;
+        this.input = new TextInput(json);
         this.offset = offset;
     }
 
@@ -105,33 +177,28 @@ public class JsonParseException extends RuntimeException {
         if (offset < 0 || getLine() < 0) {
             return "";
         }
-        return errorLine() + "\n" + " ".repeat(displayPrefixLength()) + "^";
+        return input.text(lineStart, lineEnd) + "\n" + " ".repeat(displayPrefixLength()) + "^";
     }
 
     /** Display (character) width of the error line's prefix up to the error position. */
     private int displayPrefixLength() {
-        if (jsonBytes != null) {
-            // Byte offsets shrink when decoded: the prefix's char count is the caret position.
-            return new String(jsonBytes, lineStart, offset - lineStart, StandardCharsets.UTF_8).length();
-        }
-        return offset - lineStart;
+        return input.text(lineStart, offset).length();
     }
 
     private void computePosition() {
-        if (!hasInput()) {
+        if (input == null) {
             return; // post-deserialization or detail-only: diagnostics stay unavailable
         }
         int start = 0;
         int l = 1;
         for (int i = 0; i < offset; i++) {
-            if (charAt(i) == '\n') {
+            if (input.charAt(i) == '\n') {
                 l++;
                 start = i + 1;
             }
         }
         int end = offset;
-        int len = inputLength();
-        while (end < len && charAt(end) != '\n') {
+        while (end < input.length() && input.charAt(end) != '\n') {
             end++;
         }
         this.line = l;
@@ -139,33 +206,5 @@ public class JsonParseException extends RuntimeException {
         this.lineStart = start;
         this.lineEnd = end;
         this.positionComputed = true;
-    }
-
-    private boolean hasInput() {
-        return jsonBytes != null || jsonText != null || jsonChars != null;
-    }
-
-    private int inputLength() {
-        if (jsonBytes != null) {
-            return jsonBytes.length;
-        }
-        return jsonChars != null ? jsonChars.length : jsonText.length();
-    }
-
-    private char charAt(int i) {
-        if (jsonBytes != null) {
-            return (char) (jsonBytes[i] & 0xFF);
-        }
-        return jsonChars != null ? jsonChars[i] : jsonText.charAt(i);
-    }
-
-    private String errorLine() {
-        if (jsonBytes != null) {
-            return new String(jsonBytes, lineStart, lineEnd - lineStart, StandardCharsets.UTF_8);
-        }
-        if (jsonChars != null) {
-            return new String(jsonChars, lineStart, lineEnd - lineStart);
-        }
-        return jsonText.substring(lineStart, lineEnd);
     }
 }
