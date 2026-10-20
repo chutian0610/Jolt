@@ -99,8 +99,9 @@ final class CorpusSupport {
             default: {
                 String recorded = manifest().getProperty(caseName);
                 if (!"accept".equals(recorded) && !"reject".equals(recorded)) {
-                    throw new IllegalStateException(
-                            "Unknown manifest value '" + recorded + "' for " + caseName);
+                    throw new IllegalStateException("Unknown manifest value '" + recorded
+                            + "' for " + caseName
+                            + " — case names must be y_/n_/i_ prefixed; i_ cases need a manifest entry");
                 }
                 return "accept".equals(recorded);
             }
