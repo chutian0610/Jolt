@@ -2,6 +2,7 @@ package io.github.chutian0610.jolt;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -128,5 +129,27 @@ class JoltWriterTest {
             w.reset().startObject().fieldName("n").value(42).fieldName("s").value("x\ty").endObject();
             assertEquals("{\"n\":42,\"s\":\"x\\ty\"}", w.toString());
         }
+    }
+
+    @Test
+    void fieldNameAfterArrayValueIsRejectedNotSilentlyAccepted() {
+        // Found by review: this used to emit the invalid [1,"k":5].
+        assertThrows(IllegalStateException.class,
+                () -> Jolt.write().startArray().value(1).fieldName("k").value(5).endArray().toString());
+    }
+
+    @Test
+    void toByteArrayEmitsExactEscapedBytes() {
+        byte[] bytes = Jolt.write().value("a\"b\\c\u001fd😀").toByteArray();
+        assertArrayEquals("\"a\\\"b\\\\c\\u001fd😀\"".getBytes(java.nio.charset.StandardCharsets.UTF_8), bytes);
+    }
+
+    @Test
+    void writerDepthLimitMatchesTheParser() {
+        JoltWriter w = Jolt.write();
+        for (int i = 0; i < JoltParser.DEFAULT_MAX_DEPTH; i++) {
+            w.startArray();
+        }
+        assertThrows(IllegalStateException.class, w::startArray);
     }
 }

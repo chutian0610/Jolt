@@ -5,10 +5,17 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 /**
- * Streaming JSON writer producing compact UTF-8 output into a reusable, grow-on-demand buffer
- * (zero-allocation steady state once warmed). Structural write order is enforced by a state
- * machine — the write-direction mirror of the parser's — and separators (',' and ':') are
- * inserted automatically, so a document completed through this API is always valid strict JSON.
+ * Streaming JSON writer producing compact UTF-8 output into a reusable, grow-on-demand buffer.
+ * Structural write order is enforced by a state machine — the write-direction mirror of the
+ * parser's — and separators (',' and ':') are inserted automatically, so a document completed
+ * through this API is always valid strict JSON. Write-order misuse raises
+ * {@link IllegalStateException} (a programming error); data failures such as lone surrogates
+ * raise {@link JsonParseException} (the boundary exception). Nesting depth is bounded like the
+ * parser (default {@link JoltParser#DEFAULT_MAX_DEPTH}).
+ *
+ * <p>Allocation contract: after buffer warm-up, the long/boolean/null and string paths allocate
+ * zero bytes per call; {@code value(double)} and {@code value(BigDecimal)} still allocate via
+ * {@code toString} (the same debt as the parser's parseDouble, deferred to T8).
  * Instances are reusable via {@link #reset()} (buffer retained) and not thread-safe.
  */
 public final class JoltWriter {
@@ -18,10 +25,9 @@ public final class JoltWriter {
     private static final int ST_TOP_DONE = 1;
     private static final int ST_OBJ_KEY_OR_END = 2;
     private static final int ST_OBJ_KEY = 3;   // after ',' in an object: a field name is mandatory
-    private static final int ST_COLON = 4;     // field written, ':' pending (internal, transient)
-    private static final int ST_VALUE = 5;     // a value is mandatory (after ':' or ',' in an array)
-    private static final int ST_ARR_VALUE_OR_END = 6;
-    private static final int ST_AFTER = 7;     // value done inside a container
+    private static final int ST_VALUE = 4;     // a value is mandatory (after ':' or ',' in an array)
+    private static final int ST_ARR_VALUE_OR_END = 5;
+    private static final int ST_AFTER = 6;     // value done inside a container
 
     private static final byte OBJ = '{';
     private static final byte ARR = '[';
@@ -70,6 +76,9 @@ public final class JoltWriter {
 
     public JoltWriter fieldName(String name) {
         if (state == ST_AFTER) {
+            if (top() != OBJ) {
+                throw new IllegalStateException("field name not allowed inside an array");
+            }
             writeByte(',');
             state = ST_OBJ_KEY;
         }
@@ -193,6 +202,10 @@ public final class JoltWriter {
     }
 
     private void push(byte container) {
+        if (depth == JoltParser.DEFAULT_MAX_DEPTH) {
+            throw new IllegalStateException(
+                    "nesting depth exceeds limit " + JoltParser.DEFAULT_MAX_DEPTH);
+        }
         if (depth == stack.length) {
             stack = Arrays.copyOf(stack, stack.length * 2);
         }
@@ -249,7 +262,8 @@ public final class JoltWriter {
      */
     private void writeStringEscaped(String s) {
         int n = s.length();
-        ensure(n * 6 + 2); // worst case: every char escapes to a 6-byte Unicode escape
+        // long math then clamp: a plain n*6 overflows int for pathological (~3.6B-char) inputs.
+        ensure((int) Math.min(2L + n * 6L, Integer.MAX_VALUE));
         for (int i = 0; i < n; i++) {
             char c = s.charAt(i);
             if (c == '"' || c == '\\') {
@@ -276,11 +290,11 @@ public final class JoltWriter {
             } else if (c >= 0xD800 && c <= 0xDBFF) {
                 i++;
                 if (i >= n) {
-                    throw new JsonParseException("unpaired surrogate in string value");
+                    throw new JsonParseException("unpaired surrogate in string");
                 }
                 char low = s.charAt(i);
                 if (low < 0xDC00 || low > 0xDFFF) {
-                    throw new JsonParseException("unpaired surrogate in string value");
+                    throw new JsonParseException("unpaired surrogate in string");
                 }
                 int cp = 0x10000 + ((c - 0xD800) << 10) + (low - 0xDC00);
                 buf[len++] = (byte) (0xF0 | (cp >> 18));
@@ -288,7 +302,7 @@ public final class JoltWriter {
                 buf[len++] = (byte) (0x80 | ((cp >> 6) & 0x3F));
                 buf[len++] = (byte) (0x80 | (cp & 0x3F));
             } else if (c >= 0xDC00 && c <= 0xDFFF) {
-                throw new JsonParseException("lone low surrogate in string value");
+                throw new JsonParseException("lone low surrogate in string");
             } else if (c < 0x800) {
                 buf[len++] = (byte) (0xC0 | (c >> 6));
                 buf[len++] = (byte) (0x80 | (c & 0x3F));
