@@ -42,9 +42,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  *   <li>{@code n_single_space}, {@code n_structure_no_data}: Jackson's readTree returns a
  *       MissingNode for whitespace-only/empty input; RFC 8259 requires exactly one value —
  *       Jolt rejects, the corpus agrees with Jolt.</li>
- *   <li>{@code i_number_*} giant/overflow forms: Jackson routes through double (underflow to 0,
- *       precision loss); Jolt retains exact BigDecimal (our recorded promotion policy).</li>
+ *   <li>{@code i_number_*} giant/overflow forms: value-level divergence from number-handling
+ *       policies (Jackson underflows through double or uses BigInteger for big ints; Jolt keeps
+ *       exact BigDecimal per ADR-0002) — these assert nothing beyond both parses succeeding.</li>
  * </ul>
+ *
+ * <p>Anti-rot: a NEW divergence (any case not on the list) fails loudly — Jackson-accept with
+ * a Jolt reject escapes as an exception, Jackson-reject with a Jolt accept trips the verdict
+ * assertion, and unlisted dual-accepts go through the value equality check.
  */
 @Tag("json-test-suite")
 class DifferentialTest {
@@ -116,8 +121,19 @@ class DifferentialTest {
                     return;
                 }
 
-                // Recorded policy divergences compile both parses but assert nothing beyond.
+                // Recorded policy divergences: pin the recorded TOKEN-LEVEL direction so the
+                // list cannot rot (a Jackson update flipping a verdict surfaces here). Value
+                // readers are NOT exercised — escaped-surrogate materialization rejection and
+                // BigDecimal range limits are reader-level policies, recorded elsewhere.
                 if (RECORDED_DIVERGENCE.contains(f.getName())) {
+                    if (!joltAccept) {
+                        // Recorded as reject (raw-byte strictness, BOM, empty docs):
+                        // the rejection must persist.
+                        assertThrows(JsonParseException.class, () -> drainTokens(Jolt.parse(raw)),
+                                f.getName());
+                    } else {
+                        drainTokens(Jolt.parse(raw)); // token-level accept must persist
+                    }
                     return;
                 }
                 assertEquals(canonicalJackson(jackson), canonicalJolt(Jolt.parse(raw)),
@@ -155,6 +171,15 @@ class DifferentialTest {
     private static Object canonicalJolt(JoltParser parser) throws IOException {
         Token t = parser.nextToken();
         return canonicalValue(parser, t);
+    }
+
+    private static Token[] drainTokens(JoltParser parser) {
+        List<Token> out = new ArrayList<>();
+        Token t;
+        while ((t = parser.nextToken()) != Token.EOF) {
+            out.add(t);
+        }
+        return out.toArray(new Token[0]);
     }
 
     /** Canonicalizes the value whose START/scalar token has already been consumed. */
