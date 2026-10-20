@@ -30,7 +30,7 @@ public final class Utf8Parser implements JoltParser {
     private static final int ST_ARR_VALUE_OR_END = 7;
     private static final int ST_AFTER = 8;
 
-    private final byte[] json;
+    private byte[] json;
     private final int maxDepth;
     // Lenient features (ADR-0001): final per-instance flags, individually opt-in; a disabled
     // feature's branch is never taken.
@@ -83,6 +83,27 @@ public final class Utf8Parser implements JoltParser {
         this.comments = (features & JoltConfig.F_COMMENTS) != 0;
         this.trailingCommas = (features & JoltConfig.F_TRAILING_COMMAS) != 0;
         this.containerStack = new byte[Math.min(maxDepth, 16)];
+    }
+
+    /**
+     * Re-arms this parser for a new document, retaining the scratch and container buffers —
+     * zero-allocation reuse across messages. Configuration (lenient switches, depth limit) stays
+     * fixed on the instance.
+     */
+    public Utf8Parser reset(byte[] json) {
+        this.json = json;
+        this.pos = 0;
+        this.depth = 0;
+        this.state = ST_TOP_VALUE;
+        this.valueStart = 0;
+        this.valueEnd = 0;
+        this.lastToken = Token.EOF;
+        this.lastTokenStart = 0;
+        this.tokenStart = 0;
+        this.stringHasEscape = false;
+        this.errorDetail = null;
+        this.errorOffset = 0;
+        return this;
     }
 
     /**

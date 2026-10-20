@@ -1,5 +1,8 @@
 package io.github.chutian0610.jolt;
 
+import java.io.IOException;
+import java.io.InputStream;
+
 /**
  * Stateless entry points into the Jolt parser.
  */
@@ -40,6 +43,39 @@ public final class Jolt {
     /** Begins writing a JSON document into a reusable UTF-8 buffer. */
     public static JoltWriter write() {
         return new JoltWriter();
+    }
+
+    /** A concrete UTF-8 engine instance for zero-allocation reuse across messages via
+     * {@link Utf8Parser#reset(byte[])}. */
+    public static Utf8Parser utf8Parser(byte[] json) {
+        return new Utf8Parser(json);
+    }
+
+    /** A concrete UTF-8 engine instance under an explicit configuration. */
+    public static Utf8Parser utf8Parser(byte[] json, JoltConfig config) {
+        return new Utf8Parser(json, config);
+    }
+
+    /** A concrete UTF-16 engine instance for reuse across messages via
+     * {@link Utf16Parser#reset(String)}. */
+    public static Utf16Parser utf16Parser(String json) {
+        return new Utf16Parser(json);
+    }
+
+    /** A concrete UTF-16 engine instance under an explicit configuration. */
+    public static Utf16Parser utf16Parser(String json, JoltConfig config) {
+        return new Utf16Parser(json, config);
+    }
+
+    /** Parses from an InputStream by buffering it internally (the adapter path — the byte[]
+     * fast path stays zero-copy). */
+    public static JoltParser parse(InputStream in) throws IOException {
+        return new Utf8Parser(in.readAllBytes());
+    }
+
+    /** Parses from an InputStream under an explicit configuration. */
+    public static JoltParser parse(InputStream in, JoltConfig config) throws IOException {
+        return new Utf8Parser(in.readAllBytes(), config);
     }
 
     /** Validates a UTF-8 document without exceptions: shared success sentinel, or diagnostics. */
