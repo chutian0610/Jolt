@@ -30,6 +30,10 @@ public final class Utf16Parser implements JoltParser {
 
     private final char[] json;
     private final int maxDepth;
+    // Lenient features (ADR-0001): final per-instance flags, individually opt-in; a disabled
+    // feature's branch is never taken and the JIT specializes it away.
+    private final boolean comments;
+    private final boolean trailingCommas;
     // Grown on demand (doubling, capped at maxDepth) so a huge configured limit never
     // pre-allocates a huge array up front.
     private byte[] containerStack;
@@ -52,15 +56,25 @@ public final class Utf16Parser implements JoltParser {
     private char[] scratch;
 
     Utf16Parser(String json) {
-        this(json, JoltParser.DEFAULT_MAX_DEPTH);
+        this(json, JoltParser.DEFAULT_MAX_DEPTH, 0);
     }
 
     Utf16Parser(String json, int maxDepth) {
+        this(json, maxDepth, 0);
+    }
+
+    Utf16Parser(String json, JoltConfig config) {
+        this(json, config.maxDepth, config.features);
+    }
+
+    Utf16Parser(String json, int maxDepth, int features) {
         if (maxDepth < 1) {
             throw new IllegalArgumentException("maxDepth must be >= 1, got " + maxDepth);
         }
         this.json = json.toCharArray();
         this.maxDepth = maxDepth;
+        this.comments = (features & JoltConfig.F_COMMENTS) != 0;
+        this.trailingCommas = (features & JoltConfig.F_TRAILING_COMMAS) != 0;
         this.containerStack = new byte[Math.min(maxDepth, 16)];
     }
 
@@ -151,6 +165,15 @@ public final class Utf16Parser implements JoltParser {
                     scanLiteral("null");
                     state = afterValue();
                     return Token.VALUE_NULL;
+                }
+                case '/' -> {
+                    // Only reachable as a comment opener; strict mode rejects here with the
+                    // same branch it would otherwise never take.
+                    if (!comments) {
+                        throw error("Unexpected character");
+                    }
+                    skipComment();
+                    continue;
                 }
                 default -> {
                     if ((c >= '0' && c <= '9') || c == '-') {
@@ -421,6 +444,14 @@ public final class Utf16Parser implements JoltParser {
             pop();
             return endToken;
         }
+        if (trailingCommas
+                && ((container == OBJECT && state == ST_OBJ_KEY)
+                        || (container == ARRAY && state == ST_VALUE))) {
+            // Exactly one trailing comma: ',' already advanced the state past ST_AFTER, and a
+            // second ',' would have failed there — so this is the sole trailing position.
+            pop();
+            return endToken;
+        }
         throw error(what + " not allowed here");
     }
 
@@ -446,6 +477,34 @@ public final class Utf16Parser implements JoltParser {
     }
 
     // --- scanners ---
+
+    /** Skips a comment; the cursor sits just past the consumed '/'. */
+    private void skipComment() {
+        if (pos >= json.length) {
+            throw error("unterminated comment");
+        }
+        char c = json[pos];
+        if (c == '/') {
+            while (pos < json.length && json[pos] != '\n') {
+                pos++;
+            }
+            return; // the newline (or EOF) is handled by whitespace skipping on the next round
+        }
+        if (c == '*') {
+            pos++;
+            while (true) {
+                if (pos + 1 >= json.length) {
+                    throw error("unterminated comment");
+                }
+                if (json[pos] == '*' && json[pos + 1] == '/') {
+                    pos += 2;
+                    return;
+                }
+                pos++;
+            }
+        }
+        throw error("malformed comment");
+    }
 
     private void scanStringSpan() {
         stringHasEscape = false;

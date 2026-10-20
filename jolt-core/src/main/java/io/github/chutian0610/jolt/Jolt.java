@@ -26,4 +26,14 @@ public final class Jolt {
     public static JoltParser parse(String json, int maxDepth) {
         return new Utf16Parser(json, maxDepth);
     }
+
+    /** Begins parsing a UTF-8 document under an explicit configuration. */
+    public static JoltParser parse(byte[] json, JoltConfig config) {
+        return new Utf8Parser(json, config);
+    }
+
+    /** Begins parsing a {@link String} document under an explicit configuration. */
+    public static JoltParser parse(String json, JoltConfig config) {
+        return new Utf16Parser(json, config);
+    }
 }
