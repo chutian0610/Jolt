@@ -39,6 +39,9 @@ _Avoid_: compliant mode, standard mode.
 **Boundary exception**:
 The error-handling contract: failures propagate internally as error codes (fast return, no throws); they materialize as a `JsonParseException` only at the public API boundary. The optional `tryParse` entry returns a `ParseResult` instead — a shared success sentinel, zero allocation on success.
 
+**Engine parity**:
+The contract that both lexical engines behave identically — same tokens, values, promotion boundaries, and error semantics — for identical document text. Guarded by dual-engine test matrices and the exhaustive escape round-trip; a drift between the engines' mirrored copies fails loudly.
+
 **Lenient feature**:
 An opt-in extension (comments, trailing commas, ...) enabled by explicit configuration. A lenient feature must never pollute the fast path when it is disabled.
 _Avoid_: relaxed mode, permissive mode.
