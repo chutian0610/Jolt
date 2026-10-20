@@ -37,6 +37,11 @@ public final class Jolt {
         return new Utf16Parser(json, config);
     }
 
+    /** Begins writing a JSON document into a reusable UTF-8 buffer. */
+    public static JoltWriter write() {
+        return new JoltWriter();
+    }
+
     /** Validates a UTF-8 document without exceptions: shared success sentinel, or diagnostics. */
     public static ParseResult tryParse(byte[] json) {
         return new Utf8Parser(json).drainOrFailure();
