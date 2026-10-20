@@ -12,6 +12,10 @@ import org.junit.jupiter.api.TestFactory;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -25,10 +29,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * The JSONTestSuite corpus (pinned commit, fetched by the {@code downloadJsonTestSuite} task):
- * y_ files must parse to EOF, n_ files must fail, and i_ files must behave exactly as recorded
- * in the i-manifest (src/test/resources/jsontestsuite/i-manifest.properties) — the manifest is
- * the regression contract for implementation-defined cases.
+ * The JSONTestSuite corpus (pinned commit, fetched by the {@code downloadJsonTestSuite} task),
+ * replayed on BOTH engines: every case runs as raw UTF-8 bytes and as a String (decoded
+ * strictly — a file that cannot decode as UTF-8 is rejection on the String path).
+ * y_ files must parse to EOF, n_ files must fail, and i_ files must behave exactly as
+ * recorded in the i-manifest (src/test/resources/jsontestsuite/i-manifest.properties).
  *
  * <p>Runs under the {@code json-test-suite} tag, part of {@code check} via the
  * {@code jsonTestSuiteTest} task.
@@ -49,11 +54,42 @@ class JsonTestSuiteTest {
         return Arrays.stream(corpus)
                 .filter(f -> f.getName().startsWith("y_") || f.getName().startsWith("n_")
                         || f.getName().startsWith("i_"))
-                .map(f -> switch (f.getName().substring(0, 2)) {
-                    case "y_" -> DynamicTest.dynamicTest(f.getName(), () -> assertParsesToEof(f));
-                    case "n_" -> DynamicTest.dynamicTest(f.getName(), () -> assertRejected(f));
-                    default -> DynamicTest.dynamicTest(f.getName(), () -> assertManifestBehavior(f));
-                });
+                .flatMap(f -> Stream.of(
+                        DynamicTest.dynamicTest("bytes/" + f.getName(),
+                                () -> runCase(f.getName(), read(f), false)),
+                        DynamicTest.dynamicTest("string/" + f.getName(),
+                                () -> runCase(f.getName(), read(f), true))));
+    }
+
+    /** Runs one corpus case on one engine: UTF-8 bytes, or String via strict UTF-8 decoding. */
+    private static void runCase(String caseName, byte[] raw, boolean asString) throws IOException {
+        boolean expectAccept;
+        switch (caseName.substring(0, 2)) {
+            case "y_" -> expectAccept = true;
+            case "n_" -> expectAccept = false;
+            default -> expectAccept = "accept".equals(manifest().getProperty(caseName));
+        }
+        JoltParser parser;
+        if (asString) {
+            String text;
+            try {
+                text = decodeStrict(raw);
+            } catch (CharacterCodingException undecodable) {
+                // The bytes cannot even form a String; on the String path that is rejection.
+                if (expectAccept) {
+                    fail("expected accept but the file is not decodable as UTF-8: " + caseName);
+                }
+                return;
+            }
+            parser = Jolt.parse(text);
+        } else {
+            parser = Jolt.parse(raw);
+        }
+        if (expectAccept) {
+            assertDoesNotThrow(() -> drain(parser), caseName);
+        } else {
+            assertThrows(JsonParseException.class, () -> drain(parser), caseName);
+        }
     }
 
     /** The manifest and the corpus must describe exactly the same set of i_ cases. */
@@ -83,6 +119,14 @@ class JsonTestSuiteTest {
         return dir;
     }
 
+    private static String decodeStrict(byte[] raw) throws CharacterCodingException {
+        return StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(raw))
+                .toString();
+    }
+
     private static synchronized Properties manifest() throws IOException {
         if (manifestCache == null) {
             Properties props = new Properties();
@@ -98,33 +142,11 @@ class JsonTestSuiteTest {
         return manifestCache;
     }
 
-    private static void assertManifestBehavior(File file) throws IOException {
-        String expected = manifest().getProperty(file.getName());
-        if (expected == null) {
-            fail("No manifest entry for " + file.getName() + " — record its behavior deliberately");
-        }
-        if (expected.equals("accept")) {
-            assertDoesNotThrow(() -> drain(Files.readAllBytes(file.toPath())), file.getName());
-        } else if (expected.equals("reject")) {
-            assertThrows(JsonParseException.class,
-                    () -> drain(Files.readAllBytes(file.toPath())), file.getName());
-        } else {
-            fail("Unknown manifest value '" + expected + "' for " + file.getName());
-        }
+    private static byte[] read(File file) throws IOException {
+        return Files.readAllBytes(file.toPath());
     }
 
-    private static void assertParsesToEof(File file) throws IOException {
-        byte[] json = Files.readAllBytes(file.toPath());
-        assertDoesNotThrow(() -> drain(json), file.getName());
-    }
-
-    private static void assertRejected(File file) throws IOException {
-        byte[] json = Files.readAllBytes(file.toPath());
-        assertThrows(JsonParseException.class, () -> drain(json), file.getName());
-    }
-
-    private static void drain(byte[] json) {
-        JoltParser parser = Jolt.parse(json);
+    private static void drain(JoltParser parser) {
         while (parser.nextToken() != Token.EOF) {
             // consume the stream
         }

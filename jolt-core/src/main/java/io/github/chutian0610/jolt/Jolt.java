@@ -9,11 +9,21 @@ public final class Jolt {
 
     /** Begins parsing a UTF-8 JSON document held in {@code json} with the default depth limit. */
     public static JoltParser parse(byte[] json) {
-        return new JoltParser(json);
+        return new Utf8Parser(json);
     }
 
-    /** Begins parsing with an explicit nesting depth limit. */
+    /** Begins parsing a UTF-8 document with an explicit nesting depth limit. */
     public static JoltParser parse(byte[] json, int maxDepth) {
-        return new JoltParser(json, maxDepth);
+        return new Utf8Parser(json, maxDepth);
+    }
+
+    /** Begins parsing a JSON document held in a {@link String} (UTF-16 engine, no transcoding). */
+    public static JoltParser parse(String json) {
+        return new Utf16Parser(json);
+    }
+
+    /** Begins parsing a {@link String} document with an explicit nesting depth limit. */
+    public static JoltParser parse(String json, int maxDepth) {
+        return new Utf16Parser(json, maxDepth);
     }
 }
