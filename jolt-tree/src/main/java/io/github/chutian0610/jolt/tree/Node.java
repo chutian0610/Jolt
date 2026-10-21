@@ -25,7 +25,6 @@ public final class Node {
     private int count;
     private String text;      // STRING content, or the NUMBER node's retained source text
     private boolean bool;
-    private Object numericCache;
 
     private Node(TypeTag tag) {
         this.tag = tag;
@@ -145,10 +144,14 @@ public final class Node {
                 // The verbatim-text write lands with the byte-exact round-trip gate.
                 String t = text;
                 if (t.matches("-?\\d+")) {
-                    writer.value(Long.parseLong(t));
-                } else {
-                    writer.value(new BigDecimal(t));
+                    try {
+                        writer.value(Long.parseLong(t));
+                        return;
+                    } catch (NumberFormatException beyondLong) {
+                        // fall through: a legal JSON integer may exceed the long range
+                    }
                 }
+                writer.value(new BigDecimal(t));
             }
             case BOOLEAN -> writer.value(bool);
             case NULL -> writer.nullValue();

@@ -48,4 +48,17 @@ class TreeTracerTest {
         Node scalar = Tree.parse(utf8("42"));
         assertThrows(IllegalStateException.class, () -> scalar.put("k", Node.newObject()));
     }
+
+    @Test
+    void emptyAndSiblingContainers() {
+        assertEquals("[]", Tree.parse(utf8("[]")).toJson());
+        assertEquals("{}", Tree.parse(utf8("{}")).toJson());
+        assertEquals("[[1],[2]]", Tree.parse(utf8("[[1],[2]] ")).toJson());
+    }
+
+    @Test
+    void integerBeyondLongRangeStillWrites() {
+        String doc = "{\"big\":99999999999999999999}";
+        assertEquals(doc, Tree.parse(utf8(doc)).toJson());
+    }
 }
