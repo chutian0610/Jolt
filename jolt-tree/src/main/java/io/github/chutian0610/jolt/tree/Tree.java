@@ -49,9 +49,9 @@ public final class Tree {
             Node value = scalarOrNull(parser, t);
             if (value == null) {
                 if (t == Token.START_OBJECT) {
-                    value = Node.newObject();
+                    value = Node.object();
                 } else if (t == Token.START_ARRAY) {
-                    value = Node.newArray();
+                    value = Node.array();
                 } else if (t == Token.END_OBJECT || t == Token.END_ARRAY) {
                     // Nested containers were attached to their parent at open time.
                     Node closed = containers.pop();
@@ -90,11 +90,11 @@ public final class Tree {
     /** Builds the node for a scalar token, or null when the token opens/closes a container. */
     private static Node scalarOrNull(JoltParser parser, Token t) {
         return switch (t) {
-            case VALUE_STRING -> Node.ofString(parser.textValue());
-            case VALUE_NUMBER_INT, VALUE_NUMBER_FLOAT -> Node.ofNumber(parser.numberText());
-            case VALUE_TRUE -> Node.ofBoolean(true);
-            case VALUE_FALSE -> Node.ofBoolean(false);
-            case VALUE_NULL -> Node.ofNull();
+            case VALUE_STRING -> Node.of(parser.textValue());
+            case VALUE_NUMBER_INT, VALUE_NUMBER_FLOAT -> Node.ofNumberText(parser.numberText());
+            case VALUE_TRUE -> Node.of(true);
+            case VALUE_FALSE -> Node.of(false);
+            case VALUE_NULL -> Node.nullValue();
             default -> null;
         };
     }

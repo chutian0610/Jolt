@@ -46,7 +46,7 @@ class TreeTracerTest {
     @Test
     void containerOperationsOnWrongNodeTypeThrow() {
         Node scalar = Tree.parse(utf8("42"));
-        assertThrows(IllegalStateException.class, () -> scalar.put("k", Node.newObject()));
+        assertThrows(IllegalStateException.class, () -> scalar.put("k", Node.object()));
     }
 
     @Test

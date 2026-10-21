@@ -31,34 +31,49 @@ public final class Node {
         this.tag = tag;
     }
 
-    static Node newObject() {
+    /** An empty OBJECT node. */
+    public static Node object() {
         return new Node(TypeTag.OBJECT);
     }
 
-    static Node newArray() {
+    /** An empty ARRAY node. */
+    public static Node array() {
         return new Node(TypeTag.ARRAY);
     }
 
-    static Node ofString(String value) {
+    public static Node of(String value) {
         Node n = new Node(TypeTag.STRING);
         n.text = Objects.requireNonNull(value);
         return n;
     }
 
-    static Node ofNumber(String numberText) {
-        Node n = new Node(TypeTag.NUMBER);
-        n.text = Objects.requireNonNull(numberText);
-        return n;
-    }
-
-    static Node ofBoolean(boolean value) {
+    public static Node of(boolean value) {
         Node n = new Node(TypeTag.BOOLEAN);
         n.bool = value;
         return n;
     }
 
-    static Node ofNull() {
+    public static Node of(long value) {
+        return ofNumberText(Long.toString(value));
+    }
+
+    public static Node of(double value) {
+        return ofNumberText(Double.toString(value));
+    }
+
+    public static Node of(BigDecimal value) {
+        return ofNumberText(Objects.requireNonNull(value).toString());
+    }
+
+    /** The JSON {@code null} node. */
+    public static Node nullValue() {
         return new Node(TypeTag.NULL);
+    }
+
+    static Node ofNumberText(String numberText) {
+        Node n = new Node(TypeTag.NUMBER);
+        n.text = Objects.requireNonNull(numberText);
+        return n;
     }
 
     public TypeTag type() {
@@ -107,12 +122,67 @@ public final class Node {
         return this;
     }
 
+    /** Raw overload: a Java-null value becomes a JSON {@code null} node (Jackson parity). */
+    public Node put(String key, String value) {
+        return put(key, value == null ? nullValue() : of(value));
+    }
+
+    /** Raw overload: a Java-null value becomes a JSON {@code null} node. */
+    public Node put(String key, long value) {
+        return put(key, of(value));
+    }
+
+    /** Raw overload: a Java-null value becomes a JSON {@code null} node. */
+    public Node put(String key, Double value) {
+        return put(key, value == null ? nullValue() : of(value));
+    }
+
+    /** Raw overload: a Java-null value becomes a JSON {@code null} node. */
+    public Node put(String key, BigDecimal value) {
+        return put(key, value == null ? nullValue() : of(value));
+    }
+
+    /** Raw overload: a Java-null value becomes a JSON {@code null} node. */
+    public Node put(String key, Boolean value) {
+        return put(key, value == null ? nullValue() : of(value));
+    }
+
+    /** Explicitly writes the JSON {@code null} literal under {@code key}. */
+    public Node putNull(String key) {
+        return put(key, nullValue());
+    }
+
     public Node add(Node value) {
         requireContainer(TypeTag.ARRAY);
         Objects.requireNonNull(value);
         values = append(values, value);
         count++;
         return this;
+    }
+
+    /** Raw overload: a Java-null value becomes a JSON {@code null} element. */
+    public Node add(String value) {
+        return add(value == null ? nullValue() : of(value));
+    }
+
+    /** Raw overload: a Java-null value becomes a JSON {@code null} element. */
+    public Node add(long value) {
+        return add(of(value));
+    }
+
+    /** Raw overload: a Java-null value becomes a JSON {@code null} element. */
+    public Node add(Double value) {
+        return add(value == null ? nullValue() : of(value));
+    }
+
+    /** Raw overload: a Java-null value becomes a JSON {@code null} element. */
+    public Node add(Boolean value) {
+        return add(value == null ? nullValue() : of(value));
+    }
+
+    /** Raw overload: a Java-null value becomes a JSON {@code null} element. */
+    public Node add(BigDecimal value) {
+        return add(value == null ? nullValue() : of(value));
     }
 
     /** The retained source text of a NUMBER node, exactly as it was parsed or built. */
