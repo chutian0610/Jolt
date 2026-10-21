@@ -124,4 +124,13 @@ final class CorpusSupport {
         }
         return out.toArray(new Token[0]);
     }
+
+    /** Strict UTF-8 decode (REPORT): malformed bytes raise, never silently replace. */
+    static String decodeStrict(byte[] raw) throws java.nio.charset.CharacterCodingException {
+        return java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(raw))
+                .toString();
+    }
 }

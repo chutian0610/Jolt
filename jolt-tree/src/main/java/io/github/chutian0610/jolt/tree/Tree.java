@@ -21,6 +21,21 @@ public final class Tree {
         return load(Jolt.parse(json));
     }
 
+    /** Loads a String document on the UTF-16 engine — no transcoding bridge. */
+    public static Node parse(String json) {
+        return load(Jolt.parse(json));
+    }
+
+    /** Loads a UTF-8 document under an explicit configuration (lenient switches, depth limit). */
+    public static Node parse(byte[] json, io.github.chutian0610.jolt.JoltConfig config) {
+        return load(Jolt.parse(json, config));
+    }
+
+    /** Loads a String document under an explicit configuration. */
+    public static Node parse(String json, io.github.chutian0610.jolt.JoltConfig config) {
+        return load(Jolt.parse(json, config));
+    }
+
     static Node load(JoltParser parser) {
         Deque<Node> containers = new ArrayDeque<>();
         Node root = null;

@@ -25,6 +25,7 @@ public final class Node {
     private int count;
     private String text;      // STRING content, or the NUMBER node's retained source text
     private boolean bool;
+    private Object numericCache; // BigDecimal, computed on first numeric view
 
     private Node(TypeTag tag) {
         this.tag = tag;
@@ -120,6 +121,44 @@ public final class Node {
         return text;
     }
 
+    /** The STRING content; a type mismatch is a programming error and throws. */
+    public String asText() {
+        requireType(TypeTag.STRING);
+        return text;
+    }
+
+    /** The BOOLEAN value; a type mismatch is a programming error and throws. */
+    public boolean asBoolean() {
+        requireType(TypeTag.BOOLEAN);
+        return bool;
+    }
+
+    /**
+     * The exact {@link BigDecimal} value of a NUMBER node, parsed from the retained text on
+     * first access and cached. Text beyond BigDecimal's grammar limits (absurd exponents)
+     * raises {@link NumberFormatException}.
+     */
+    public BigDecimal asDecimal() {
+        requireType(TypeTag.NUMBER);
+        if (numericCache == null) {
+            numericCache = new BigDecimal(text);
+        }
+        return (BigDecimal) numericCache;
+    }
+
+    /**
+     * The integer value when the conversion is exact; lossy or overflowing conversions raise
+     * {@link ArithmeticException} — use {@link #asDecimal()} for the exact wide form.
+     */
+    public long asLong() {
+        return asDecimal().longValueExact();
+    }
+
+    /** The double value, best effort: overflow reads as infinity, underflow as zero. */
+    public double asDouble() {
+        return asDecimal().doubleValue();
+    }
+
     /** Writes this subtree as compact JSON through the core writer. */
     public void writeTo(JoltWriter writer) {
         switch (tag) {
@@ -168,6 +207,95 @@ public final class Node {
     @Override
     public String toString() {
         return toJson();
+    }
+
+    /** JSON value semantics: objects key-order-independent, numbers numerically compared. */
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (!(obj instanceof Node other) || tag != other.tag) {
+            return false;
+        }
+        return switch (tag) {
+            case OBJECT -> equalsObject(other);
+            case ARRAY -> equalsArray(other);
+            case STRING -> text.equals(other.text);
+            case NUMBER -> compareNumeric(other);
+            case BOOLEAN -> bool == other.bool;
+            case NULL -> true;
+        };
+    }
+
+    /**
+     * Numeric comparison when both texts parse (BigDecimal semantics); text equality as the
+     * fallback for texts beyond BigDecimal's grammar — equals never throws.
+     */
+    private boolean compareNumeric(Node other) {
+        try {
+            return asDecimal().compareTo(other.asDecimal()) == 0;
+        } catch (NumberFormatException beyondGrammar) {
+            return text.equals(other.text);
+        }
+    }
+
+    private boolean equalsObject(Node other) {
+        if (count != other.count) {
+            return false;
+        }
+        for (int i = 0; i < count; i++) {
+            Node theirs = other.get(keys[i]);
+            if (theirs == null || !values[i].equals(theirs)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean equalsArray(Node other) {
+        if (count != other.count) {
+            return false;
+        }
+        for (int i = 0; i < count; i++) {
+            if (!values[i].equals(other.values[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Consistent with {@link #equals(Object)}: numbers hash via their stripped form, falling
+     * back to their text when that form is beyond BigDecimal's grammar. */
+    @Override
+    public int hashCode() {
+        int content = switch (tag) {
+            case OBJECT -> {
+                int sum = 0;
+                for (int i = 0; i < count; i++) {
+                    sum += keys[i].hashCode() ^ values[i].hashCode();
+                }
+                yield sum;
+            }
+            case ARRAY -> {
+                int result = 1;
+                for (int i = 0; i < count; i++) {
+                    result = result * 31 + values[i].hashCode();
+                }
+                yield result;
+            }
+            case STRING -> text.hashCode();
+            case NUMBER -> {
+                try {
+                    yield asDecimal().stripTrailingZeros().hashCode();
+                } catch (NumberFormatException beyondGrammar) {
+                    yield text.hashCode();
+                }
+            }
+            case BOOLEAN -> Boolean.hashCode(bool);
+            case NULL -> 0;
+        };
+        return 31 * tag.hashCode() + content;
     }
 
     private void requireContainer(TypeTag expected) {
