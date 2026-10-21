@@ -3,6 +3,7 @@ package io.github.chutian0610.jolt;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
  * Streaming JSON writer producing compact UTF-8 output into a reusable, grow-on-demand buffer.
@@ -141,6 +142,26 @@ public final class JoltWriter {
     public JoltWriter value(BigDecimal value) {
         beforeValue();
         ascii(value.toString());
+        afterValue();
+        return this;
+    }
+
+    /**
+     * Writes caller-supplied numeric text verbatim — the escape hatch for layers that retain
+     * original number text (the tree layer) and must not re-render it. The caller guarantees
+     * the text is a valid JSON number; this method only checks the first byte cheaply.
+     */
+    public JoltWriter valueRaw(String numberText) {
+        Objects.requireNonNull(numberText);
+        if (numberText.isEmpty()) {
+            throw new IllegalArgumentException("empty number text");
+        }
+        char first = numberText.charAt(0);
+        if (first != '-' && (first < '0' || first > '9')) {
+            throw new IllegalArgumentException("not a JSON number: " + numberText);
+        }
+        beforeValue();
+        literal(numberText.getBytes(StandardCharsets.US_ASCII));
         afterValue();
         return this;
     }

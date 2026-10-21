@@ -4,6 +4,7 @@ import io.github.chutian0610.jolt.JoltWriter;
 
 import java.math.BigDecimal;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -110,6 +111,16 @@ public final class Node {
 
     public int size() {
         return count;
+    }
+
+    /** The object's keys as an insertion-ordered defensive snapshot; empty for non-objects. */
+    public java.util.List<String> keys() {
+        return List.of(keys).subList(0, count);
+    }
+
+    /** The container's values as an insertion-ordered defensive snapshot. */
+    public java.util.List<Node> elements() {
+        return List.of(values).subList(0, count);
     }
 
     public Node put(String key, Node value) {
@@ -265,20 +276,7 @@ public final class Node {
                 writer.endArray();
             }
             case STRING -> writer.value(text);
-            case NUMBER -> {
-                // Tracer form: integral text takes the long path, everything else BigDecimal.
-                // The verbatim-text write lands with the byte-exact round-trip gate.
-                String t = text;
-                if (t.matches("-?\\d+")) {
-                    try {
-                        writer.value(Long.parseLong(t));
-                        return;
-                    } catch (NumberFormatException beyondLong) {
-                        // fall through: a legal JSON integer may exceed the long range
-                    }
-                }
-                writer.value(new BigDecimal(t));
-            }
+            case NUMBER -> writer.valueRaw(text); // the retained source text, verbatim
             case BOOLEAN -> writer.value(bool);
             case NULL -> writer.nullValue();
         }

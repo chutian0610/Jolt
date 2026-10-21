@@ -53,44 +53,7 @@ class DifferentialTest {
 
     private static final ObjectMapper JACKSON = new ObjectMapper();
 
-    /**
-     * Cases where a recorded policy divergence exists; verdict and value both skip. The
-     * escaped-lone-surrogate class comes from the shared corpus constant (same list the
-     * tree-parity gate uses); the remaining classes are differential-specific.
-     */
-    private static final List<String> RECORDED_DIVERGENCE;
-    static {
-        List<String> combined = new ArrayList<>(CorpusSupport.ESCAPED_SURROGATE_ACCEPT_CASES);
-        // raw-byte strictness: Jackson lenient, Jolt strict
-        combined.add("i_string_UTF-16LE_with_BOM.json");
-        combined.add("i_string_UTF8_surrogate_U+D800.json");
-        combined.add("i_string_invalid_utf-8.json");
-        combined.add("i_string_iso_latin_1.json");
-        combined.add("i_string_lone_utf8_continuation_byte.json");
-        combined.add("i_string_not_in_unicode_range.json");
-        combined.add("i_string_overlong_sequence_2_bytes.json");
-        combined.add("i_string_overlong_sequence_6_bytes.json");
-        combined.add("i_string_overlong_sequence_6_bytes_null.json");
-        combined.add("i_string_truncated-utf-8.json");
-        combined.add("i_string_utf16BE_no_BOM.json");
-        combined.add("i_string_utf16LE_no_BOM.json");
-        combined.add("i_structure_UTF-8_BOM_empty_object.json");
-        // empty/whitespace documents: Jackson MissingNode, Jolt RFC-rejects
-        combined.add("n_single_space.json");
-        combined.add("n_structure_no_data.json");
-        // number precision: Jackson double-routed, Jolt exact BigDecimal
-        combined.add("i_number_double_huge_neg_exp.json");
-        combined.add("i_number_huge_exp.json");
-        combined.add("i_number_neg_int_huge_exp.json");
-        combined.add("i_number_pos_double_huge_exp.json");
-        combined.add("i_number_real_neg_overflow.json");
-        combined.add("i_number_real_pos_overflow.json");
-        combined.add("i_number_real_underflow.json");
-        combined.add("i_number_too_big_neg_int.json");
-        combined.add("i_number_too_big_pos_int.json");
-        combined.add("i_number_very_big_negative_int.json");
-        RECORDED_DIVERGENCE = List.copyOf(combined);
-    }
+    private static final List<String> RECORDED_DIVERGENCE = CorpusSupport.RECORDED_DIVERGENCE;
 
     @TestFactory
     Iterable<DynamicTest> jacksonDifferential() {
