@@ -54,11 +54,22 @@ class NodeMutationTest {
         // explicit form
         doc.putNull("c");
         assertEquals(TypeTag.NULL, doc.get("c").type());
+        // every boxed raw form converts: no boxed-null surprises at runtime
+        doc.put("d", (Double) null);
+        doc.put("l", (Long) null);
+        doc.put("f", (Boolean) null);
+        doc.put("g", (BigDecimal) null);
+        doc.put("s", (String) null);
+        for (String k : new String[]{"b", "c", "d", "l", "f", "g", "s"}) {
+            assertEquals(TypeTag.NULL, doc.get(k).type(), k);
+        }
         // arrays behave the same
         Node arr = Node.array();
         assertThrows(NullPointerException.class, () -> arr.add((Node) null));
         arr.add((String) null);
+        arr.add((Long) null);
         assertEquals(TypeTag.NULL, arr.get(0).type());
+        assertEquals(TypeTag.NULL, arr.get(1).type());
         // missing stays distinct from all of them
         assertNull(doc.get("absent"));
     }

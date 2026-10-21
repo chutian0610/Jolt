@@ -13,6 +13,12 @@ import java.util.Objects;
  * lookup (small-object workload); insertion order is the document order and the serialization
  * order. NUMBER nodes retain the original source text; serialization writes it verbatim.
  * Missing keys and indexes read as Java {@code null}; JSON null is a {@link TypeTag#NULL} node.
+ *
+ * <p>Null policy: {@code Node}-typed parameters reject Java null (NPE — a typed null is a
+ * bug); raw-value overloads convert Java null into the JSON {@code null} literal (Jackson
+ * parity); {@code putNull(key)} and {@code nullValue()} are the explicit forms. A bare
+ * {@code put("k", null)} is deliberately a compile error — the five raw overloads force the
+ * intent to be written down.
  */
 public final class Node {
 
@@ -132,6 +138,12 @@ public final class Node {
         return put(key, of(value));
     }
 
+    /** Boxed overload: a Java-null {@code Long} becomes a JSON {@code null} node instead of
+     * unboxing into an unexpected NPE. */
+    public Node put(String key, Long value) {
+        return put(key, value == null ? nullValue() : of(value));
+    }
+
     /** Raw overload: a Java-null value becomes a JSON {@code null} node. */
     public Node put(String key, Double value) {
         return put(key, value == null ? nullValue() : of(value));
@@ -168,6 +180,11 @@ public final class Node {
     /** Raw overload: a Java-null value becomes a JSON {@code null} element. */
     public Node add(long value) {
         return add(of(value));
+    }
+
+    /** Boxed overload: a Java-null {@code Long} becomes a JSON {@code null} element. */
+    public Node add(Long value) {
+        return add(value == null ? nullValue() : of(value));
     }
 
     /** Raw overload: a Java-null value becomes a JSON {@code null} element. */
