@@ -46,6 +46,40 @@ everything else promotes to an exact `BigDecimal` — and `numberText()` always 
 untouched source. Parsing defaults to strict RFC 8259; comments and trailing commas are
 individually opt-in via `JoltConfig` and cost nothing when off ([ADR-0001](docs/adr/0001-strict-rfc8259-by-default.md)).
 
+## Tree layer (jolt-tree)
+
+An in-memory document model on top of the core: one final mutable `Node` class discriminated
+by `TypeTag`, fluent construction, strict accessors, and JSON value equality (objects
+key-order-independent, numbers numerically compared). The `jolt-tree` module depends on
+`jolt-core`; the core never depends on it.
+
+```java
+import io.github.chutian0610.jolt.tree.Node;
+import io.github.chutian0610.jolt.tree.Tree;
+
+Node doc = Tree.parse(jsonBytes);              // same engines, config, depth limit as the core
+String name = doc.get("name").asText();        // strict: type mismatch throws
+doc.get("tags").add("new");                    // mutable, fluent
+byte[] out = doc.toJson().getBytes(...);       // serialize through the core writer
+
+Node built = Node.object()
+        .put("name", "jolt")
+        .put("count", 42)
+        .put("tags", Node.array().add("a").add((String) null))
+        .put("ratio", 2.5);
+```
+
+**What the tree promises:** parsed-then-serialized documents are **byte-identical** whenever
+the source was already in canonical compact form — NUMBER nodes retain and serialize their
+original text verbatim (`1.50e2` stays `1.50e2`; `9007199254740993` never touches a double),
+key order and escapes that re-encode identically survive byte for byte. The tree normalizes
+only insignificant whitespace, escape FORMS (`\uXXXX`/`\/` → raw characters), and duplicate
+object keys (map semantics, last value wins). Trees compare by value, so a tree loaded from
+bytes equals the same document loaded from a String — both engines produce equal trees.
+
+**What it does not promise:** the zero-allocation contract is a core-layer property; the tree
+allocates by design and has no performance bars (its gates are correctness gates).
+
 ## Performance
 
 The M1 bars, measured on the final M1 code (commit `31f06c2`-lineage, verified at gate review):
