@@ -22,7 +22,22 @@ _Avoid_: serializer, encoder.
 The streaming parser and writer, zero dependencies. The only deliverable of milestone 1.
 
 **Tree layer**:
-An in-memory document model built on the core layer. Milestone 2+.
+An in-memory document model built on the core layer, delivered as the `jolt-tree` module (M2). Depends on `jolt-core`; the core never depends on it.
+_Avoid_: DOM, JsonNode (Jackson's name).
+
+**Node**:
+The tree layer's single final class: one instance type for every JSON value, discriminated by `TypeTag`. Mutable after construction (fluent `put`/`add` return `this`).
+_Avoid_: JsonObject/JsonArray (per-type class hierarchies), JoltNode.
+
+**TypeTag**:
+The node discriminator enum: `OBJECT`, `ARRAY`, `STRING`, `NUMBER`, `BOOLEAN`, `NULL`. One `NUMBER` tag — the parser's INT/FLOAT token split does not survive into the tree; numeric views answer per value.
+
+**Missing vs JSON null**:
+`get(key)` returning Java `null` means the key (or index) is absent; JSON `null` is a `Node` with `TypeTag.NULL`. Two different things, two different representations.
+_Avoid_: MissingNode.
+
+**Value equality**:
+`Node.equals`/`hashCode` follow JSON value semantics: objects compare key-order-independently, numbers compare by numeric value (BigDecimal semantics), `toString` emits compact JSON.
 
 **Binding layer**:
 POJO/record mapping built on the core layer. Milestone 3+.
