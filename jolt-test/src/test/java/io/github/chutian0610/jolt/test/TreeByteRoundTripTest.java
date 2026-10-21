@@ -94,32 +94,6 @@ class TreeByteRoundTripTest {
         return true;
     }
 
-    /** True when no whitespace byte occurs outside string literals. */
-    static boolean isWhitespaceFreeOutsideStrings(byte[] json) {
-        boolean inString = false;
-        boolean escaped = false;
-        for (byte b : json) {
-            if (inString) {
-                if (escaped) {
-                    if (b == 'u' || b == 'U' || b == '/') {
-                        return false; // escape form that re-encodes to its raw character
-                    }
-                    escaped = false;
-                } else if (b == '\\') {
-                    escaped = true;
-                } else if (b == '"') {
-                    inString = false;
-                }
-                continue;
-            }
-            if (b == '"') {
-                inString = true;
-            } else if (b == ' ' || b == '\t' || b == '\n' || b == '\r') {
-                return false;
-            }
-        }
-        return true;
-    }
 
     private static Token[] tokens(JoltParser parser) {
         List<Token> out = new ArrayList<>();

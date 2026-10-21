@@ -160,6 +160,12 @@ public final class JoltWriter {
         if (first != '-' && (first < '0' || first > '9')) {
             throw new IllegalArgumentException("not a JSON number: " + numberText);
         }
+        for (int i = 0; i < numberText.length(); i++) {
+            if (numberText.charAt(i) > 0x7F) {
+                throw new IllegalArgumentException(
+                        "non-ASCII character in number text: " + numberText);
+            }
+        }
         beforeValue();
         literal(numberText.getBytes(StandardCharsets.US_ASCII));
         afterValue();
