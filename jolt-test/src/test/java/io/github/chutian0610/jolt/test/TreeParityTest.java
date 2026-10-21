@@ -29,19 +29,6 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 @Tag("json-test-suite")
 class TreeParityTest {
 
-    /** Escaped-lone-surrogate i_ cases: token-level accept, tree-level reject (both engines). */
-    private static final List<String> TREE_MATERIALIZES_NOT = List.of(
-            "i_object_key_lone_2nd_surrogate.json",
-            "i_string_1st_surrogate_but_2nd_missing.json",
-            "i_string_1st_valid_surrogate_2nd_invalid.json",
-            "i_string_incomplete_surrogate_and_escape_valid.json",
-            "i_string_incomplete_surrogate_pair.json",
-            "i_string_incomplete_surrogates_escape_valid.json",
-            "i_string_invalid_lonely_surrogate.json",
-            "i_string_invalid_surrogate.json",
-            "i_string_inverted_surrogates_U+1D11E.json",
-            "i_string_lone_second_surrogate.json");
-
     @TestFactory
     Iterable<DynamicTest> treesMatchAcrossEngines() {
         List<DynamicTest> tests = new ArrayList<>();
@@ -52,7 +39,7 @@ class TreeParityTest {
                     assertStringPathRejects(c);
                     return;
                 }
-                if (TREE_MATERIALIZES_NOT.contains(c.name())) {
+                if (CorpusSupport.ESCAPED_SURROGATE_ACCEPT_CASES.contains(c.name())) {
                     // Tree-level rejection policy: strings must materialize to enter a tree.
                     assertThrows(JsonParseException.class, () -> Tree.parse(c.bytes()), c.name());
                     assertStringPathRejects(c);

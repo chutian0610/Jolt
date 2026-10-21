@@ -20,6 +20,21 @@ import java.util.stream.Stream;
  */
 final class CorpusSupport {
 
+    /** The escaped-lone-surrogate i_ cases: token-level accept, tree-level reject (both
+     * engines) — strings must materialize to enter a tree. Shared by the differential and
+     * tree-parity gates so the lists cannot drift apart. */
+    static final List<String> ESCAPED_SURROGATE_ACCEPT_CASES = List.of(
+            "i_object_key_lone_2nd_surrogate.json",
+            "i_string_1st_surrogate_but_2nd_missing.json",
+            "i_string_1st_valid_surrogate_2nd_invalid.json",
+            "i_string_incomplete_surrogate_and_escape_valid.json",
+            "i_string_incomplete_surrogate_pair.json",
+            "i_string_incomplete_surrogates_escape_valid.json",
+            "i_string_invalid_lonely_surrogate.json",
+            "i_string_invalid_surrogate.json",
+            "i_string_inverted_surrogates_U+1D11E.json",
+            "i_string_lone_second_surrogate.json");
+
     private static Properties manifestCache;
 
     /** One corpus case: its name, its exact bytes, and the recorded expected verdict. */
