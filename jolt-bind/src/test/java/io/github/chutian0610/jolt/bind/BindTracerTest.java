@@ -34,4 +34,12 @@ class BindTracerTest {
         assertEquals(fromBytes, fromString); // records: value equality for free
         assertEquals(DOC, Bind.write(fromString));
     }
+
+    @Test
+    void typeMismatchFailsAsBindExceptionWithPath() {
+        JsonBindException e = org.junit.jupiter.api.Assertions.assertThrows(JsonBindException.class,
+                () -> Bind.parse("{\"name\":42,\"count\":1,\"ok\":true}", ScalarFixture.class));
+        assertEquals("$.name", e.getPath());
+        org.junit.jupiter.api.Assertions.assertTrue(e.getMessage().contains("expected a string"), e.getMessage());
+    }
 }

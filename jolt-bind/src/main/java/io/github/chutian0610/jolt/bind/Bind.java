@@ -1,6 +1,7 @@
 package io.github.chutian0610.jolt.bind;
 
 import io.github.chutian0610.jolt.tree.Node;
+import io.github.chutian0610.jolt.tree.TypeTag;
 import io.github.chutian0610.jolt.tree.Tree;
 
 import java.lang.reflect.InvocationTargetException;
@@ -69,19 +70,39 @@ public final class Bind {
             return null;
         }
         if (target == String.class) {
+            requireTag(field, TypeTag.STRING, "a string", path);
             return field.asText();
         }
         if (target == long.class || target == Long.class) {
-            return field.asLong();
+            requireTag(field, TypeTag.NUMBER, "a number", path);
+            try {
+                return field.asLong();
+            } catch (ArithmeticException beyondLong) {
+                throw new JsonBindException("number does not fit in a long", path);
+            }
         }
         if (target == int.class || target == Integer.class) {
-            return Math.toIntExact(field.asLong());
+            requireTag(field, TypeTag.NUMBER, "a number", path);
+            try {
+                return Math.toIntExact(field.asLong());
+            } catch (ArithmeticException beyondInt) {
+                throw new JsonBindException("number does not fit in an int", path);
+            }
         }
         if (target == boolean.class || target == Boolean.class) {
+            requireTag(field, TypeTag.BOOLEAN, "a boolean", path);
             return field.asBoolean();
         }
         throw new JsonBindException("unsupported component type " + target.getSimpleName()
                 + " (lands with M3-T2)", path);
+    }
+
+    /** Strict binding: the JSON type must match the target — mismatch is a mapping error,
+     * reported as a bind exception at the value's path (never a raw accessor throw). */
+    private static void requireTag(Node field, TypeTag expected, String wanted, String path) {
+        if (field.type() != expected) {
+            throw new JsonBindException("expected " + wanted + " but found " + field.type(), path);
+        }
     }
 
     // --- value → record (write direction) ---
