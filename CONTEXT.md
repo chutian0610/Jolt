@@ -36,11 +36,20 @@ The node discriminator enum: `OBJECT`, `ARRAY`, `STRING`, `NUMBER`, `BOOLEAN`, `
 `get(key)` returning Java `null` means the key (or index) is absent; JSON `null` is a `Node` with `TypeTag.NULL`. Two different things, two different representations.
 _Avoid_: MissingNode.
 
+**Bind**:
+The binding facade: `Bind.parse(json, Type)` constructs records/POJOs from JSON; `Bind.write(value)` serializes them back. JSON names are component/property names verbatim — no annotations, no naming strategies in M3.
+
+**JsonBindException**:
+The binding failure: a runtime exception carrying the JSON path (`$.user.tags[2]`), distinct from `JsonParseException` — parse errors are syntax, bind errors are data mapping. Two layers, two exceptions.
+
+**Strict binding**:
+No wide conversions: the JSON type must match the target ("42" does not bind to int). Missing reference components read as null (the constructor decides); missing or null values for primitive components throw.
+
 **Value equality**:
 `Node.equals`/`hashCode` follow JSON value semantics: objects compare key-order-independently, numbers compare by numeric value (BigDecimal semantics), `toString` emits compact JSON.
 
 **Binding layer**:
-POJO/record mapping built on the core layer. Milestone 3+.
+POJO/record mapping built on the core and tree layers, delivered as the `jolt-bind` module (M3). Loads via the tree (parse → Node → constructed types; serialize symmetrically) — a direct streaming bind is a possible future evolution, not part of M3.
 
 **`jolt-simd`**:
 An optional experimental module using the Vector API for token scanning. Never a dependency of `jolt-core`.
