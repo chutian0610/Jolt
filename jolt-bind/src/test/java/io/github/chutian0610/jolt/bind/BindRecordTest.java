@@ -73,6 +73,12 @@ class BindRecordTest {
         assertEquals((byte) 127, v.b());
         assertEquals((short) 32767, v.s());
         assertEquals(2147483647, v.i());
+        // lower bounds bind exactly (the review caught Long.MIN_VALUE being rejected);
+        // each document fills every primitive so binding reaches the component under test
+        assertEquals((byte) -128, Bind.parse(utf8(fullScalars("\"b\":-128")), AllScalars.class).b());
+        assertEquals((short) -32768, Bind.parse(utf8(fullScalars("\"s\":-32768")), AllScalars.class).s());
+        assertEquals(-2147483648, Bind.parse(utf8(fullScalars("\"i\":-2147483648")), AllScalars.class).i());
+        assertEquals(-9223372036854775808L, Bind.parse(utf8(fullScalars("\"l\":-9223372036854775808")), AllScalars.class).l());
         assertEquals(9007199254740993L, v.l()); // never through double
         assertEquals(1.5f, v.f());
         assertEquals(2.5, v.d());
@@ -112,5 +118,11 @@ class BindRecordTest {
         String deep = "[".repeat(513) + "1" + "]".repeat(513);
         assertThrows(io.github.chutian0610.jolt.JsonParseException.class,
                 () -> Bind.parse(utf8(deep), Order.class));
+    }
+
+    /** A complete AllScalars document with one component overridden. */
+    private static String fullScalars(String override) {
+        return "{\"b\":1,\"s\":1,\"i\":1,\"l\":1,\"f\":1.0,\"d\":1.0,\"flag\":true,"
+                + "\"text\":\"x\"," + override + "}";
     }
 }

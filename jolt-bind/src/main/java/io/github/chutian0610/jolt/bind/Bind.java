@@ -136,7 +136,8 @@ public final class Bind {
             case "int", "Integer" -> Integer.MAX_VALUE;
             default -> Long.MAX_VALUE;
         };
-        if (value > bound || value < -bound - (bound == Long.MAX_VALUE ? 0 : 1)) {
+        // -bound - 1 is exact for all four widths: -(2^63-1)-1 == Long.MIN_VALUE in long math.
+        if (value > bound || value < -bound - 1) {
             throw new JsonBindException("number does not fit in " + target.getSimpleName(), path);
         }
         if (target == byte.class || target == Byte.class) {
@@ -173,6 +174,21 @@ public final class Bind {
         }
         if (value instanceof Integer i) {
             return Node.of((long) i);
+        }
+        if (value instanceof Byte b) {
+            return Node.of((long) b);
+        }
+        if (value instanceof Short sh) {
+            return Node.of((long) sh);
+        }
+        if (value instanceof Float f) {
+            return Node.of((double) f);
+        }
+        if (value instanceof Double d) {
+            return Node.of(d);
+        }
+        if (value instanceof BigInteger big) {
+            return Node.of(new BigDecimal(big));
         }
         if (value instanceof Boolean b) {
             return Node.of(b);
