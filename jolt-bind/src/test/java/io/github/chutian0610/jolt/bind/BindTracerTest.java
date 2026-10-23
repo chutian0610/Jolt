@@ -6,10 +6,11 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+/** Tracer-scope scalar fixture, top-level so sibling tests can reference it. */
+record ScalarFixture(String name, long count, boolean ok) {}
+
 /** The M3 tracer: JSON → record → JSON through the tree, content-identical. */
 class BindTracerTest {
-
-    record ScalarFixture(String name, long count, boolean ok) {}
 
     private static final String DOC = "{\"name\":\"jolt\",\"count\":42,\"ok\":true}";
 

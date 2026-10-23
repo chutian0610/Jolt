@@ -3,8 +3,9 @@ package io.github.chutian0610.jolt.test;
 import io.github.chutian0610.jolt.bind.Bind;
 import io.github.chutian0610.jolt.bind.BindConfig;
 import io.github.chutian0610.jolt.bind.JsonBindException;
-import io.github.chutian0610.jolt.test.BindFixtures.Customer;
-import io.github.chutian0610.jolt.test.BindFixtures.Order;
+import io.github.chutian0610.jolt.bind.fixtures.BindFixtures;
+import io.github.chutian0610.jolt.bind.fixtures.BindFixtures.Customer;
+import io.github.chutian0610.jolt.bind.fixtures.BindFixtures.Order;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -96,13 +97,13 @@ class BindErrorMatrixTest {
                 Customer.class);
         assertNull(withTier.tier());
         // primitive: missing throws, never a silent zero (Item.quantity is int)
-        io.github.chutian0610.jolt.test.BindFixtures.Item item =
-                Bind.parse(utf8("{\"sku\":\"s1\",\"quantity\":2}"), io.github.chutian0610.jolt.test.BindFixtures.Item.class);
+        io.github.chutian0610.jolt.bind.fixtures.BindFixtures.Item item =
+                Bind.parse(utf8("{\"sku\":\"s1\",\"quantity\":2}"), io.github.chutian0610.jolt.bind.fixtures.BindFixtures.Item.class);
         assertEquals("s1", item.sku());
         assertNull(item.price());
         JsonBindException e = assertThrows(JsonBindException.class,
                 () -> Bind.parse(utf8("{\"sku\":\"s2\",\"price\":1}"),
-                        io.github.chutian0610.jolt.test.BindFixtures.Item.class));
+                        io.github.chutian0610.jolt.bind.fixtures.BindFixtures.Item.class));
         assertEquals("$.quantity", e.getPath());
     }
 }

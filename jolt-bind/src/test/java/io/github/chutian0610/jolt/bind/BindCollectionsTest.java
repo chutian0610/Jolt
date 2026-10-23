@@ -2,6 +2,7 @@ package io.github.chutian0610.jolt.bind;
 
 import org.junit.jupiter.api.Test;
 
+import io.github.chutian0610.jolt.bind.fixtures.BindFixtures;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -21,8 +22,6 @@ class BindCollectionsTest {
     record Tagged(String id, List<String> tags, Status status) {}
 
     record NestedCollections(Map<String, List<Integer>> index, List<List<String>> grid) {}
-
-    record Untyped(List<Object> any, Map<String, Object> dynamic) {}
 
     record WithNumbers(List<Integer> ints, double[] doubles) {}
 
@@ -97,8 +96,8 @@ class BindCollectionsTest {
 
     @Test
     void untypedElementsMapNaturally() {
-        Untyped u = Bind.parse(utf8("{\"any\":[\"s\",7,1.5,true,null,[1],{\"k\":2}],"
-                + "\"dynamic\":{\"deep\":{\"x\":1}}}"), Untyped.class);
+        BindFixtures.Untyped u = Bind.parse(utf8("{\"any\":[\"s\",7,1.5,true,null,[1],{\"k\":2}],"
+                + "\"dynamic\":{\"deep\":{\"x\":1}}}"), BindFixtures.Untyped.class);
         List<Object> any = u.any();
         assertEquals("s", any.get(0));
         assertEquals(7L, any.get(1));
@@ -200,7 +199,7 @@ class BindCollectionsTest {
 
     @Test
     void naturalBigDecimalOverflowAndDeterministicPojoOrder() {
-        Untyped u = Bind.parse(utf8("{\"any\":[1e400]}"), Untyped.class);
+        BindFixtures.Untyped u = Bind.parse(utf8("{\"any\":[1e400]}"), BindFixtures.Untyped.class);
         assertInstanceOf(BigDecimal.class, u.any().get(0));
         assertEquals(new BigDecimal("1e400"), u.any().get(0));
 

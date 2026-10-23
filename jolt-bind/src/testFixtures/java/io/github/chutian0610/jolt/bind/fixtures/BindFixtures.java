@@ -1,11 +1,15 @@
-package io.github.chutian0610.jolt.test;
+package io.github.chutian0610.jolt.bind.fixtures;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.List;
 import java.util.Map;
 
-/** The binding fixture graph: every M3 type shape in one document tree, shared by the gates. */
+/**
+ * THE binding fixture graph — one home for the record shapes every bind unit test and gate
+ * binds against (the architecture review's C2: same-name/different-shape twins deleted).
+ * Canonical documents live here too, byte-matching {@code Bind.write} output.
+ */
 public final class BindFixtures {
 
     public enum Status { ACTIVE, ARCHIVED }
@@ -19,7 +23,8 @@ public final class BindFixtures {
                         BigInteger sequence, double ratio, boolean gift) {}
 
     public record Scalars(byte b, short s, int i, long l, float f, double d,
-                          boolean flag, String text, BigDecimal dec, BigInteger big) {}
+                          boolean flag, String text, BigDecimal dec, BigInteger big,
+                          Integer boxedNullable) {}
 
     public record Untyped(List<Object> any, Map<String, Object> dynamic) {}
 
@@ -50,7 +55,7 @@ public final class BindFixtures {
     public static final String SCALARS_JSON = "{\"b\":-128,\"s\":-32768,\"i\":-2147483648,"
             + "\"l\":-9223372036854775808,\"f\":1.5,\"d\":2.5,\"flag\":true,"
             + "\"text\":\"a\\\"b\\\\c\\u0001\",\"dec\":0.1000000000000000000001,"
-            + "\"big\":123456789012345678901234567890123456789}";
+            + "\"big\":123456789012345678901234567890123456789,\"boxedNullable\":null}";
 
     private BindFixtures() {}
 }

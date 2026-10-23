@@ -14,9 +14,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** Full record binding: nesting, the null contract, strict scalars, and the two-layer exceptions. */
 class BindRecordTest {
 
-    record Customer(String name, Integer tier, long total) {}
+    // Minimal unit-local shapes, honestly named (the canonical graph lives in fixtures).
+    record MinimalCustomer(String name, Integer tier, long total) {}
 
-    record Order(String id, Customer customer) {}
+    record MinimalOrder(String id, MinimalCustomer customer) {}
 
     record AllScalars(byte b, short s, int i, long l, float f, double d,
                       boolean flag, String text, BigDecimal dec, BigInteger big,
@@ -28,8 +29,8 @@ class BindRecordTest {
 
     @Test
     void nestedRecordsBindRecursively() {
-        Order order = Bind.parse(utf8("{\"id\":\"o1\",\"customer\":{\"name\":\"ann\",\"tier\":2,\"total\":150}}"),
-                Order.class);
+        MinimalOrder order = Bind.parse(utf8("{\"id\":\"o1\",\"customer\":{\"name\":\"ann\",\"tier\":2,\"total\":150}}"),
+                MinimalOrder.class);
         assertEquals("o1", order.id());
         assertEquals("ann", order.customer().name());
         assertEquals(2, order.customer().tier());
@@ -38,7 +39,7 @@ class BindRecordTest {
 
     @Test
     void missingReferenceComponentReadsAsNull() {
-        Order order = Bind.parse(utf8("{\"id\":\"o2\"}"), Order.class);
+        MinimalOrder order = Bind.parse(utf8("{\"id\":\"o2\"}"), MinimalOrder.class);
         assertEquals("o2", order.id());
         assertNull(order.customer());
     }
@@ -47,7 +48,7 @@ class BindRecordTest {
     void nestedPathCarriesInErrors() {
         JsonBindException e = assertThrows(JsonBindException.class,
                 () -> Bind.parse(utf8("{\"id\":\"o3\",\"customer\":{\"name\":true,\"tier\":1,\"total\":1}}"),
-                        Order.class));
+                        MinimalOrder.class));
         assertEquals("$.customer.name", e.getPath());
         assertTrue(e.getMessage().contains("expected a string"), e.getMessage());
     }
@@ -55,10 +56,10 @@ class BindRecordTest {
     @Test
     void primitiveMissingAndNullThrow() {
         JsonBindException missing = assertThrows(JsonBindException.class,
-                () -> Bind.parse(utf8("{\"name\":\"a\",\"ok\":true}"), BindTracerTest.ScalarFixture.class));
+                () -> Bind.parse(utf8("{\"name\":\"a\",\"ok\":true}"), ScalarFixture.class));
         assertEquals("$.count", missing.getPath());
         JsonBindException jsonNull = assertThrows(JsonBindException.class,
-                () -> Bind.parse(utf8("{\"name\":\"a\",\"count\":null,\"ok\":true}"), BindTracerTest.ScalarFixture.class));
+                () -> Bind.parse(utf8("{\"name\":\"a\",\"count\":null,\"ok\":true}"), ScalarFixture.class));
         assertEquals("$.count", jsonNull.getPath());
         assertTrue(jsonNull.getMessage().contains("JSON null"), jsonNull.getMessage());
     }
@@ -102,9 +103,9 @@ class BindRecordTest {
 
     @Test
     void unknownFieldsAreIgnoredByDefault() {
-        Order order = Bind.parse(
+        MinimalOrder order = Bind.parse(
                 utf8("{\"id\":\"o4\",\"customer\":null,\"sneaky\":{\"deep\":1},\"also\":true}"),
-                Order.class);
+                MinimalOrder.class);
         assertEquals("o4", order.id());
         assertNull(order.customer());
     }
@@ -113,11 +114,11 @@ class BindRecordTest {
     void parseErrorsStayParseExceptions() {
         // syntax: the two-exception layering holds through the bind facade
         assertThrows(io.github.chutian0610.jolt.JsonParseException.class,
-                () -> Bind.parse(utf8("{\"id\": oops}"), Order.class));
+                () -> Bind.parse(utf8("{\"id\": oops}"), MinimalOrder.class));
         // depth: unchanged core contract
         String deep = "[".repeat(513) + "1" + "]".repeat(513);
         assertThrows(io.github.chutian0610.jolt.JsonParseException.class,
-                () -> Bind.parse(utf8(deep), Order.class));
+                () -> Bind.parse(utf8(deep), MinimalOrder.class));
     }
 
     /** A complete AllScalars document with one component overridden. */

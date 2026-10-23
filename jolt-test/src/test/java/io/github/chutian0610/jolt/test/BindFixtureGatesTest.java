@@ -3,8 +3,9 @@ package io.github.chutian0610.jolt.test;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.chutian0610.jolt.bind.Bind;
 import io.github.chutian0610.jolt.bind.JsonBindException;
-import io.github.chutian0610.jolt.test.BindFixtures.Order;
-import io.github.chutian0610.jolt.test.BindFixtures.Scalars;
+import io.github.chutian0610.jolt.bind.fixtures.BindFixtures;
+import io.github.chutian0610.jolt.bind.fixtures.BindFixtures.Order;
+import io.github.chutian0610.jolt.bind.fixtures.BindFixtures.Scalars;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;

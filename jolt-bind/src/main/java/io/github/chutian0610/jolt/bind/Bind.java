@@ -91,7 +91,9 @@ public final class Bind {
             throw new JsonBindException("record constructor rejected the bound values: "
                     + e.getCause(), path);
         } catch (ReflectiveOperationException e) {
-            throw new JsonBindException("cannot construct " + type.getName(), path);
+            // Includes the cause: "not accessible" (non-public target from another package)
+            // and "no such constructor" are different fixes.
+            throw new JsonBindException("cannot construct " + type.getName() + ": " + e, path);
         }
     }
 
@@ -301,11 +303,11 @@ public final class Bind {
 
     private static Object naturalNumber(Node field, String path) {
         String text = field.numberText();
-        if (text.matches("-?\\d+")) {
+        if (isIntegralForm(text)) {
             try {
                 return Long.valueOf(text);
             } catch (NumberFormatException beyondLong) {
-                return new BigDecimal(text);
+                return field.asDecimal(); // exact wide form (cached parse)
             }
         }
         double d = field.asDouble();
@@ -313,6 +315,21 @@ public final class Bind {
             return field.asDecimal();
         }
         return d;
+    }
+
+    /** Optional sign followed by digits only — no regex compilation per untyped number. */
+    private static boolean isIntegralForm(String text) {
+        int start = text.startsWith("-") ? 1 : 0;
+        if (start >= text.length()) {
+            return false;
+        }
+        for (int i = start; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (c < '0' || c > '9') {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean isNumber(Class<?> target) {
