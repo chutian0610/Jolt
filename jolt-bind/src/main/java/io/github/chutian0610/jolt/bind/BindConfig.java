@@ -7,12 +7,26 @@ package io.github.chutian0610.jolt.bind;
  */
 public final class BindConfig {
 
-    private static final BindConfig STRICT = new BindConfig();
+    private static final BindConfig DEFAULT = new BindConfig(false);
+    private static final BindConfig FAIL_ON_UNKNOWN = new BindConfig(true);
 
-    private BindConfig() {}
+    private final boolean failOnUnknown;
+
+    private BindConfig(boolean failOnUnknown) {
+        this.failOnUnknown = failOnUnknown;
+    }
 
     /** The base configuration: unknown fields ignored. */
     public static BindConfig strict() {
-        return STRICT;
+        return DEFAULT;
+    }
+
+    /** Unknown JSON fields raise {@code JsonBindException} instead of being ignored. */
+    public BindConfig withFailOnUnknown() {
+        return FAIL_ON_UNKNOWN;
+    }
+
+    boolean failOnUnknown() {
+        return failOnUnknown;
     }
 }

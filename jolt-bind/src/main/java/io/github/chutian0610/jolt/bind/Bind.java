@@ -17,21 +17,34 @@ import java.math.BigInteger;
  * by name; writing mirrors the path (value → Node → core writer). Strict by design: the JSON
  * type must match the target — no wide conversions, no silent defaults.
  *
- * <p>Tracer scope (M3-T1): scalar components (String, long/int, boolean and their boxes).
- * Nested records, collections, enums, and POJOs land with the following tickets.
+ * <p>Supported targets: records (nested, by component name), POJOs (public no-arg constructor
+ * + public setters), collections ({@code List<X>}, {@code X[]}, {@code Map<String,X>} with
+ * generic signatures), enums (by {@code name()}), all strict scalars, and untyped
+ * {@code Object} elements via natural mapping. Polymorphic (abstract/interface) targets are
+ * rejected.
  */
 public final class Bind {
 
     private Bind() {}
 
-    /** Loads a UTF-8 JSON document into an instance of {@code type}. */
+    /** Loads a UTF-8 JSON document into an instance of {@code type} (unknown fields ignored). */
     public static <T> T parse(byte[] json, Class<T> type) {
-        return fromNode(Tree.parse(json), type, "$");
+        return parse(json, type, BindConfig.strict());
     }
 
-    /** Loads a String document into an instance of {@code type}. */
+    /** Loads a UTF-8 JSON document under an explicit binding configuration. */
+    public static <T> T parse(byte[] json, Class<T> type, BindConfig config) {
+        return fromNode(Tree.parse(json), type, config, "$");
+    }
+
+    /** Loads a String document into an instance of {@code type} (unknown fields ignored). */
     public static <T> T parse(String json, Class<T> type) {
-        return fromNode(Tree.parse(json), type, "$");
+        return parse(json, type, BindConfig.strict());
+    }
+
+    /** Loads a String document under an explicit binding configuration. */
+    public static <T> T parse(String json, Class<T> type, BindConfig config) {
+        return fromNode(Tree.parse(json), type, config, "$");
     }
 
     /** Serializes a bound value as compact JSON. */
@@ -42,22 +55,34 @@ public final class Bind {
     // --- record/POJO → value (parse direction) ---
 
     @SuppressWarnings("unchecked")
-    private static <T> T fromNode(Node node, Class<T> type, String path) {
+    private static <T> T fromNode(Node node, Class<T> type, BindConfig config, String path) {
         if (type.isRecord()) {
-            return (T) recordFrom(node, (Class<? extends java.lang.Record>) type, path);
+            return (T) recordFrom(node, (Class<? extends java.lang.Record>) type, config, path);
         }
-        return (T) pojoFrom(node, type, path);
+        return (T) pojoFrom(node, type, config, path);
     }
 
     @SuppressWarnings("unchecked")
-    private static Object recordFrom(Node node, Class<? extends java.lang.Record> type, String path) {
+    private static Object recordFrom(Node node, Class<? extends java.lang.Record> type,
+                                     BindConfig config, String path) {
         RecordComponent[] components = type.getRecordComponents();
         Object[] args = new Object[components.length];
         Class<?>[] argTypes = new Class<?>[components.length];
         for (int i = 0; i < components.length; i++) {
             String name = components[i].getName();
             argTypes[i] = components[i].getType();
-            args[i] = toValue(node.get(name), components[i].getGenericType(), path + "." + name);
+            args[i] = toValue(node.get(name), components[i].getGenericType(), path + "." + name, config);
+        }
+        if (config.failOnUnknown()) {
+            for (String key : node.keys()) {
+                boolean known = false;
+                for (RecordComponent component : components) {
+                    known |= component.getName().equals(key);
+                }
+                if (!known) {
+                    throw new JsonBindException("unknown field '" + key + "'", path + "." + key);
+                }
+            }
         }
         try {
             var constructor = type.getDeclaredConstructor(argTypes);
@@ -71,7 +96,7 @@ public final class Bind {
     }
 
     /** POJO binding: public no-arg constructor + public setters; unknown keys ignored. */
-    private static Object pojoFrom(Node node, Class<?> type, String path) {
+    private static Object pojoFrom(Node node, Class<?> type, BindConfig config, String path) {
         var constructor = publicNoArgConstructor(type);
         if (constructor == null) {
             throw new JsonBindException(type.getName()
@@ -84,12 +109,21 @@ public final class Bind {
             throw new JsonBindException("cannot instantiate " + type.getName(), path);
         }
         for (String key : node.keys()) {
+            if (key.isEmpty()) {
+                if (config.failOnUnknown()) {
+                    throw new JsonBindException("unknown field ''", path);
+                }
+                continue; // an empty key has no setter name — ignored like any unknown field
+            }
             java.lang.reflect.Method setter = setterFor(type, key);
             if (setter == null) {
+                if (config.failOnUnknown()) {
+                    throw new JsonBindException("unknown field '" + key + "'", path + "." + key);
+                }
                 continue; // unknown fields are ignored — including keys with no setter
             }
             Object value = toValue(node.get(key), setter.getGenericParameterTypes()[0],
-                    path + "." + key);
+                    path + "." + key, config);
             try {
                 setter.invoke(instance, value);
             } catch (InvocationTargetException e) {
@@ -125,7 +159,7 @@ public final class Bind {
 
     // --- value dispatch (parse) ---
 
-    private static Object toValue(Node field, java.lang.reflect.Type target, String path) {
+    private static Object toValue(Node field, java.lang.reflect.Type target, String path, BindConfig config) {
         if (field == null) {
             // Missing: reference kinds (collections, enums, records, POJOs, boxes) read null.
             if (target instanceof Class<?> raw && raw.isPrimitive()) {
@@ -141,21 +175,29 @@ public final class Bind {
             return null;
         }
         if (target instanceof java.lang.reflect.ParameterizedType parameterized) {
-            return toParameterized(field, parameterized, path);
+            return toParameterized(field, parameterized, path, config);
         }
         if (target instanceof java.lang.reflect.GenericArrayType genericArray) {
-            return toArray(field, (Class<?>) genericArray.getGenericComponentType(), path);
+            java.lang.reflect.Type component = genericArray.getGenericComponentType();
+            if (component instanceof java.lang.reflect.ParameterizedType parameterized) {
+                // List<String>[]: elements bind as the raw List, values as String.
+                return toArray(field, (Class<?>) parameterized.getRawType(), path, config);
+            }
+            if (component instanceof Class<?> componentClass) {
+                return toArray(field, componentClass, path, config);
+            }
+            throw new JsonBindException("unsupported array component type " + component, path);
         }
         if (!(target instanceof Class<?> raw)) {
             throw new JsonBindException("unsupported component type " + target, path);
         }
         if (raw.isArray()) {
-            return toArray(field, raw.getComponentType(), path);
+            return toArray(field, raw.getComponentType(), path, config);
         }
-        return toScalarOrStructure(field, raw, path);
+        return toScalarOrStructure(field, raw, path, config);
     }
 
-    private static Object toParameterized(Node field, java.lang.reflect.ParameterizedType type, String path) {
+    private static Object toParameterized(Node field, java.lang.reflect.ParameterizedType type, String path, BindConfig config) {
         var raw = (Class<?>) type.getRawType();
         var arguments = type.getActualTypeArguments();
         if (raw == List.class) {
@@ -163,7 +205,7 @@ public final class Bind {
             List<Object> out = new java.util.ArrayList<>();
             List<Node> elements = field.elements();
             for (int i = 0; i < elements.size(); i++) {
-                out.add(toValue(elements.get(i), arguments[0], path + "[" + i + "]"));
+                out.add(toValue(elements.get(i), arguments[0], path + "[" + i + "]", config));
             }
             return out;
         }
@@ -174,24 +216,24 @@ public final class Bind {
             requireTag(field, TypeTag.OBJECT, "an object", path);
             Map<String, Object> out = new java.util.LinkedHashMap<>();
             for (String key : field.keys()) {
-                out.put(key, toValue(field.get(key), arguments[1], path + "." + key));
+                out.put(key, toValue(field.get(key), arguments[1], path + "." + key, config));
             }
             return out;
         }
         throw new JsonBindException("unsupported generic type " + type.getTypeName(), path);
     }
 
-    private static Object toArray(Node field, Class<?> element, String path) {
+    private static Object toArray(Node field, Class<?> element, String path, BindConfig config) {
         requireTag(field, TypeTag.ARRAY, "an array", path);
         List<Node> elements = field.elements();
         Object out = java.lang.reflect.Array.newInstance(element, elements.size());
         for (int i = 0; i < elements.size(); i++) {
-            java.lang.reflect.Array.set(out, i, toValue(elements.get(i), element, path + "[" + i + "]"));
+            java.lang.reflect.Array.set(out, i, toValue(elements.get(i), element, path + "[" + i + "]", config));
         }
         return out;
     }
 
-    private static Object toScalarOrStructure(Node field, Class<?> raw, String path) {
+    private static Object toScalarOrStructure(Node field, Class<?> raw, String path, BindConfig config) {
         if (raw == String.class) {
             requireTag(field, TypeTag.STRING, "a string", path);
             return field.asText();
@@ -210,13 +252,13 @@ public final class Bind {
         }
         if (raw.isRecord()) {
             requireTag(field, TypeTag.OBJECT, "an object", path);
-            return recordFrom(field, raw.asSubclass(java.lang.Record.class), path);
+            return recordFrom(field, raw.asSubclass(java.lang.Record.class), config, path);
         }
         if (raw == Object.class) {
             return naturalValue(field, path);
         }
         if (!raw.isInterface() && !java.lang.reflect.Modifier.isAbstract(raw.getModifiers())) {
-            return pojoFrom(field, raw, path);
+            return pojoFrom(field, raw, config, path);
         }
         throw new JsonBindException("polymorphic binding is not supported for " + raw.getSimpleName(), path);
     }
@@ -414,9 +456,15 @@ public final class Bind {
         return pojoToNode(value, path);
     }
 
-    /** POJO serialization via public getters (getX and isX); property name from the accessor. */
+    /**
+     * POJO serialization via public getters (getX and isX); property name from the accessor.
+     * Accessors are visited in sorted-name order: getMethods() is unordered, and the byte-exact
+     * round-trip gate needs deterministic property order (records keep insertion order; POJOs
+     * keep accessor order).
+     */
     private static Node pojoToNode(Object value, String path) {
         Node object = Node.object();
+        List<java.lang.reflect.Method> accessors = new java.util.ArrayList<>();
         for (java.lang.reflect.Method method : value.getClass().getMethods()) {
             String name = method.getName();
             if (method.getParameterCount() != 0 || java.lang.reflect.Modifier.isStatic(method.getModifiers())
@@ -433,6 +481,14 @@ public final class Bind {
             if (property == null) {
                 continue;
             }
+            accessors.add(method);
+        }
+        accessors.sort(java.util.Comparator.comparing(java.lang.reflect.Method::getName));
+        for (java.lang.reflect.Method method : accessors) {
+            String name = method.getName();
+            String property = name.startsWith("is")
+                    ? Character.toLowerCase(name.charAt(2)) + name.substring(3)
+                    : Character.toLowerCase(name.charAt(3)) + name.substring(4);
             try {
                 object.put(property, toNode(method.invoke(value), path + "." + property));
             } catch (ReflectiveOperationException e) {

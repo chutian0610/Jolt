@@ -2,6 +2,7 @@ package io.github.chutian0610.jolt.bind;
 
 import org.junit.jupiter.api.Test;
 
+import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -163,5 +164,56 @@ class BindCollectionsTest {
     static class NodeStyleProbe {
         String name;
         int count;
+    }
+
+    @Test
+    void isXIsNeverASetterAndMapKeysMustBeString() {
+        // isX is a getter, never a setter: the "active" key is ignored and the flag stays false
+        OnlyIsGetter pojo = Bind.parse(utf8("{\"active\":true}"), OnlyIsGetter.class);
+        assertEquals(false, pojo.isActive());
+        // Map keys must be String: Map<Integer, String> is rejected with the path
+        JsonBindException e = assertThrows(JsonBindException.class,
+                () -> Bind.parse(utf8("{\"m\":{\"1\":\"x\"}}"), BadMapKey.class));
+        assertEquals("$.m", e.getPath());
+        assertTrue(e.getMessage().contains("map keys must be String"), e.getMessage());
+    }
+
+    public static class OnlyIsGetter {
+        public OnlyIsGetter() {}
+        private boolean active;
+
+        public boolean isActive() {
+            return active;
+        }
+    }
+
+    record BadMapKey(Map<Integer, String> m) {}
+
+    @Test
+    void missingAndNullCollectionsReadAsNull() {
+        record WithList(List<String> items) {}
+        WithList missing = Bind.parse(utf8("{}"), WithList.class);
+        assertNull(missing.items());
+        WithList jsonNull = Bind.parse(utf8("{\"items\":null}"), WithList.class);
+        assertNull(jsonNull.items());
+    }
+
+    @Test
+    void naturalBigDecimalOverflowAndDeterministicPojoOrder() {
+        Untyped u = Bind.parse(utf8("{\"any\":[1e400]}"), Untyped.class);
+        assertInstanceOf(BigDecimal.class, u.any().get(0));
+        assertEquals(new BigDecimal("1e400"), u.any().get(0));
+
+        // POJO property order is accessor-sorted and deterministic across runs (T25 gate needs this)
+        PojoFixture p = new PojoFixture();
+        p.setName("n");
+        p.setCount(1);
+        String once = Bind.write(p);
+        for (int i = 0; i < 20; i++) {
+            PojoFixture again = new PojoFixture();
+            again.setName("n");
+            again.setCount(1);
+            assertEquals(once, Bind.write(again), "POJO property order must be deterministic");
+        }
     }
 }
