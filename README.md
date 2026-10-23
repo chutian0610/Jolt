@@ -80,6 +80,33 @@ bytes equals the same document loaded from a String — both engines produce equ
 **What it does not promise:** the zero-allocation contract is a core-layer property; the tree
 allocates by design and has no performance bars (its gates are correctness gates).
 
+## Binding layer (jolt-bind)
+
+Records and POJOs ↔ JSON, through the verified tree. Strict by design: the JSON type must
+match the target — `"42"` does not bind to an int; every failure is a `JsonBindException`
+carrying the JSON path. Unknown fields are ignored by default (a `withFailOnUnknown()` switch
+exists). No annotations, no naming strategies: JSON names are component/property names
+verbatim.
+
+```java
+import io.github.chutian0610.jolt.bind.Bind;
+import io.github.chutian0610.jolt.bind.BindConfig;
+
+record Order(String id, Customer customer, List<Item> items) {}
+
+Order order = Bind.parse(jsonBytes, Order.class);   // strict scalars, nested types,
+                                                   // List/Map/arrays, enums by name
+String json = Bind.write(order);                   // byte-identical for canonical documents
+
+Order strict = Bind.parse(jsonBytes, Order.class,
+        BindConfig.defaults().withFailOnUnknown());  // unknown fields → exception
+```
+
+**What binding promises:** JSON → record → JSON is byte-identical for canonical documents
+(the verbatim-number serialization is inherited); missing reference components read as null
+while missing/null primitives throw; abstract targets are rejected (polymorphism is a future
+feature). Binding has no performance bars (same note as the tree layer).
+
 ## Performance
 
 The M1 bars, measured on the final M1 code (commit `31f06c2`-lineage, verified at gate review):
