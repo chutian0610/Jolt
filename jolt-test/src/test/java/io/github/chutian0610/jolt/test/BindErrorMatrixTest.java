@@ -33,7 +33,7 @@ class BindErrorMatrixTest {
         assertNull(ignored.customer());
 
         JsonBindException e = assertThrows(JsonBindException.class,
-                () -> Bind.parse(utf8(doc), Order.class, BindConfig.strict().withFailOnUnknown()));
+                () -> Bind.parse(utf8(doc), Order.class, BindConfig.defaults().withFailOnUnknown()));
         assertEquals("$.sneaky", e.getPath());
         assertTrue(e.getMessage().contains("unknown field"), e.getMessage());
     }
@@ -42,7 +42,7 @@ class BindErrorMatrixTest {
     void unknownFieldInNestedRecordThrowsWithFullPath() {
         String doc = "{\"id\":\"o\",\"customer\":{\"name\":\"a\",\"ghost\":1}}";
         JsonBindException e = assertThrows(JsonBindException.class,
-                () -> Bind.parse(utf8(doc), Order.class, BindConfig.strict().withFailOnUnknown()));
+                () -> Bind.parse(utf8(doc), Order.class, BindConfig.defaults().withFailOnUnknown()));
         assertEquals("$.customer.ghost", e.getPath());
     }
 
@@ -50,7 +50,7 @@ class BindErrorMatrixTest {
     void missingReferenceReadsNullRegardlessOfSwitch() {
         assertEquals(null, Bind.parse(utf8("{\"id\":\"o\",\"total\":1,\"ratio\":1.0,\"gift\":true}"), Order.class).customer());
         assertEquals(null, Bind.parse(utf8("{\"id\":\"o\",\"total\":1,\"ratio\":1.0,\"gift\":true}"), Order.class,
-                BindConfig.strict().withFailOnUnknown()).customer());
+                BindConfig.defaults().withFailOnUnknown()).customer());
     }
 
     @Test
@@ -85,7 +85,7 @@ class BindErrorMatrixTest {
     void failOnUnknownAppliesToPojoSettersToo() {
         JsonBindException e = assertThrows(JsonBindException.class,
                 () -> Bind.parse(utf8("{\"label\":\"x\",\"mystery\":1}"),
-                        BindFixtures.LabelPojo.class, BindConfig.strict().withFailOnUnknown()));
+                        BindFixtures.LabelPojo.class, BindConfig.defaults().withFailOnUnknown()));
         assertEquals("$.mystery", e.getPath());
     }
 

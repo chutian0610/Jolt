@@ -9,7 +9,6 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
@@ -63,8 +62,9 @@ class BindFixtureGatesTest {
     }
 
     @Test
-    void tryParseEquivalentSurvivesTheFacade() {
-        // parse errors keep their layer: a syntax error is never a JsonBindException
-        assertDoesNotThrow(() -> Bind.parse(BindFixtures.ORDER_JSON, Order.class));
+    void byteFormInputRoundTripsIdentically() {
+        byte[] json = BindFixtures.ORDER_JSON.getBytes(StandardCharsets.UTF_8);
+        byte[] out = Bind.write(Bind.parse(json, Order.class)).getBytes(StandardCharsets.UTF_8);
+        assertEquals(BindFixtures.ORDER_JSON, new String(out, StandardCharsets.UTF_8));
     }
 }

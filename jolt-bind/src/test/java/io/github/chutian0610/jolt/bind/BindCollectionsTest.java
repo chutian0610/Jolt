@@ -216,4 +216,12 @@ class BindCollectionsTest {
             assertEquals(once, Bind.write(again), "POJO property order must be deterministic");
         }
     }
+
+    @Test
+    void genericArrayOfParameterizedBinds() {
+        record Groups(List<String>[] groups) {}
+        Groups g = Bind.parse(utf8("{\"groups\":[[\"a\"],[\"b\",\"c\"]]}"), Groups.class);
+        assertEquals(2, g.groups().length);
+        assertEquals(List.of("b", "c"), g.groups()[1]);
+    }
 }

@@ -16,8 +16,9 @@ public final class BindConfig {
         this.failOnUnknown = failOnUnknown;
     }
 
-    /** The base configuration: unknown fields ignored. */
-    public static BindConfig strict() {
+    /** The default configuration: unknown fields ignored. (Named {@code defaults}, not
+     * {@code strict}: the strict-unknowns posture is {@link #withFailOnUnknown()}.) */
+    public static BindConfig defaults() {
         return DEFAULT;
     }
 

@@ -29,7 +29,7 @@ public final class Bind {
 
     /** Loads a UTF-8 JSON document into an instance of {@code type} (unknown fields ignored). */
     public static <T> T parse(byte[] json, Class<T> type) {
-        return parse(json, type, BindConfig.strict());
+        return parse(json, type, BindConfig.defaults());
     }
 
     /** Loads a UTF-8 JSON document under an explicit binding configuration. */
@@ -39,7 +39,7 @@ public final class Bind {
 
     /** Loads a String document into an instance of {@code type} (unknown fields ignored). */
     public static <T> T parse(String json, Class<T> type) {
-        return parse(json, type, BindConfig.strict());
+        return parse(json, type, BindConfig.defaults());
     }
 
     /** Loads a String document under an explicit binding configuration. */
@@ -178,15 +178,7 @@ public final class Bind {
             return toParameterized(field, parameterized, path, config);
         }
         if (target instanceof java.lang.reflect.GenericArrayType genericArray) {
-            java.lang.reflect.Type component = genericArray.getGenericComponentType();
-            if (component instanceof java.lang.reflect.ParameterizedType parameterized) {
-                // List<String>[]: elements bind as the raw List, values as String.
-                return toArray(field, (Class<?>) parameterized.getRawType(), path, config);
-            }
-            if (component instanceof Class<?> componentClass) {
-                return toArray(field, componentClass, path, config);
-            }
-            throw new JsonBindException("unsupported array component type " + component, path);
+            return toGenericArray(field, genericArray.getGenericComponentType(), path, config);
         }
         if (!(target instanceof Class<?> raw)) {
             throw new JsonBindException("unsupported component type " + target, path);
@@ -224,11 +216,20 @@ public final class Bind {
     }
 
     private static Object toArray(Node field, Class<?> element, String path, BindConfig config) {
+        return toGenericArray(field, element, path, config);
+    }
+
+    /** The array binding for any component type: the component keeps its full generic form. */
+    private static Object toGenericArray(Node field, java.lang.reflect.Type component,
+                                         String path, BindConfig config) {
         requireTag(field, TypeTag.ARRAY, "an array", path);
         List<Node> elements = field.elements();
-        Object out = java.lang.reflect.Array.newInstance(element, elements.size());
+        Class<?> raw = (component instanceof Class<?> c)
+                ? c
+                : (Class<?>) ((java.lang.reflect.ParameterizedType) component).getRawType();
+        Object out = java.lang.reflect.Array.newInstance(raw, elements.size());
         for (int i = 0; i < elements.size(); i++) {
-            java.lang.reflect.Array.set(out, i, toValue(elements.get(i), element, path + "[" + i + "]", config));
+            java.lang.reflect.Array.set(out, i, toValue(elements.get(i), component, path + "[" + i + "]", config));
         }
         return out;
     }
