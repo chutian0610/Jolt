@@ -6,6 +6,8 @@ import io.github.chutian0610.jolt.tree.Tree;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.RecordComponent;
+import java.util.List;
+import java.util.Map;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 
@@ -37,24 +39,29 @@ public final class Bind {
         return toNode(value, "$").toJson();
     }
 
-    // --- record → value (parse direction) ---
+    // --- record/POJO → value (parse direction) ---
 
     @SuppressWarnings("unchecked")
     private static <T> T fromNode(Node node, Class<T> type, String path) {
-        if (!type.isRecord()) {
-            throw new JsonBindException("only records bind in the tracer scope; got " + type.getName(), path);
+        if (type.isRecord()) {
+            return (T) recordFrom(node, (Class<? extends java.lang.Record>) type, path);
         }
+        return (T) pojoFrom(node, type, path);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Object recordFrom(Node node, Class<? extends java.lang.Record> type, String path) {
         RecordComponent[] components = type.getRecordComponents();
         Object[] args = new Object[components.length];
         Class<?>[] argTypes = new Class<?>[components.length];
         for (int i = 0; i < components.length; i++) {
             String name = components[i].getName();
             argTypes[i] = components[i].getType();
-            args[i] = toValue(node.get(name), argTypes[i], path + "." + name);
+            args[i] = toValue(node.get(name), components[i].getGenericType(), path + "." + name);
         }
         try {
             var constructor = type.getDeclaredConstructor(argTypes);
-            return (T) constructor.newInstance(args);
+            return constructor.newInstance(args);
         } catch (InvocationTargetException e) {
             throw new JsonBindException("record constructor rejected the bound values: "
                     + e.getCause(), path);
@@ -63,38 +70,206 @@ public final class Bind {
         }
     }
 
-    private static Object toValue(Node field, Class<?> target, String path) {
+    /** POJO binding: public no-arg constructor + public setters; unknown keys ignored. */
+    private static Object pojoFrom(Node node, Class<?> type, String path) {
+        var constructor = publicNoArgConstructor(type);
+        if (constructor == null) {
+            throw new JsonBindException(type.getName()
+                    + " has no public no-arg constructor and is not a record", path);
+        }
+        Object instance;
+        try {
+            instance = constructor.newInstance();
+        } catch (ReflectiveOperationException e) {
+            throw new JsonBindException("cannot instantiate " + type.getName(), path);
+        }
+        for (String key : node.keys()) {
+            java.lang.reflect.Method setter = setterFor(type, key);
+            if (setter == null) {
+                continue; // unknown fields are ignored — including keys with no setter
+            }
+            Object value = toValue(node.get(key), setter.getGenericParameterTypes()[0],
+                    path + "." + key);
+            try {
+                setter.invoke(instance, value);
+            } catch (InvocationTargetException e) {
+                throw new JsonBindException("setter rejected the bound value: " + e.getCause(),
+                        path + "." + key);
+            } catch (ReflectiveOperationException e) {
+                throw new JsonBindException("cannot invoke setter for " + key, path + "." + key);
+            }
+        }
+        return instance;
+    }
+
+    private static java.lang.reflect.Constructor<?> publicNoArgConstructor(Class<?> type) {
+        try {
+            return type.getConstructor();
+        } catch (NoSuchMethodException none) {
+            return null;
+        }
+    }
+
+    private static java.lang.reflect.Method setterFor(Class<?> type, String jsonKey) {
+        String setterName = "set" + Character.toUpperCase(jsonKey.charAt(0)) + jsonKey.substring(1);
+        for (java.lang.reflect.Method method : type.getMethods()) {
+            if (method.getName().equals(setterName)
+                    && method.getReturnType() == void.class
+                    && method.getParameterCount() == 1
+                    && java.lang.reflect.Modifier.isPublic(method.getModifiers())) {
+                return method;
+            }
+        }
+        return null;
+    }
+
+    // --- value dispatch (parse) ---
+
+    private static Object toValue(Node field, java.lang.reflect.Type target, String path) {
         if (field == null) {
-            if (target.isPrimitive()) {
-                throw new JsonBindException("missing value for primitive component " + target.getSimpleName(), path);
+            // Missing: reference kinds (collections, enums, records, POJOs, boxes) read null.
+            if (target instanceof Class<?> raw && raw.isPrimitive()) {
+                throw new JsonBindException("missing value for primitive component " + raw.getSimpleName(), path);
             }
             return null;
         }
         if (field.type() == TypeTag.NULL) {
-            // JSON null binds as Java null — except primitives, which have no null.
-            if (target.isPrimitive()) {
-                throw new JsonBindException("JSON null for primitive component " + target.getSimpleName(), path);
+            // JSON null: collections, enums, and other reference kinds read as Java null.
+            if (target instanceof Class<?> raw && raw.isPrimitive()) {
+                throw new JsonBindException("JSON null for primitive component " + raw.getSimpleName(), path);
             }
             return null;
         }
-        if (target == String.class) {
+        if (target instanceof java.lang.reflect.ParameterizedType parameterized) {
+            return toParameterized(field, parameterized, path);
+        }
+        if (target instanceof java.lang.reflect.GenericArrayType genericArray) {
+            return toArray(field, (Class<?>) genericArray.getGenericComponentType(), path);
+        }
+        if (!(target instanceof Class<?> raw)) {
+            throw new JsonBindException("unsupported component type " + target, path);
+        }
+        if (raw.isArray()) {
+            return toArray(field, raw.getComponentType(), path);
+        }
+        return toScalarOrStructure(field, raw, path);
+    }
+
+    private static Object toParameterized(Node field, java.lang.reflect.ParameterizedType type, String path) {
+        var raw = (Class<?>) type.getRawType();
+        var arguments = type.getActualTypeArguments();
+        if (raw == List.class) {
+            requireTag(field, TypeTag.ARRAY, "an array", path);
+            List<Object> out = new java.util.ArrayList<>();
+            List<Node> elements = field.elements();
+            for (int i = 0; i < elements.size(); i++) {
+                out.add(toValue(elements.get(i), arguments[0], path + "[" + i + "]"));
+            }
+            return out;
+        }
+        if (raw == Map.class) {
+            if (arguments[0] != String.class) {
+                throw new JsonBindException("map keys must be String, got " + arguments[0], path);
+            }
+            requireTag(field, TypeTag.OBJECT, "an object", path);
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+            for (String key : field.keys()) {
+                out.put(key, toValue(field.get(key), arguments[1], path + "." + key));
+            }
+            return out;
+        }
+        throw new JsonBindException("unsupported generic type " + type.getTypeName(), path);
+    }
+
+    private static Object toArray(Node field, Class<?> element, String path) {
+        requireTag(field, TypeTag.ARRAY, "an array", path);
+        List<Node> elements = field.elements();
+        Object out = java.lang.reflect.Array.newInstance(element, elements.size());
+        for (int i = 0; i < elements.size(); i++) {
+            java.lang.reflect.Array.set(out, i, toValue(elements.get(i), element, path + "[" + i + "]"));
+        }
+        return out;
+    }
+
+    private static Object toScalarOrStructure(Node field, Class<?> raw, String path) {
+        if (raw == String.class) {
             requireTag(field, TypeTag.STRING, "a string", path);
             return field.asText();
         }
-        if (target == boolean.class || target == Boolean.class) {
+        if (raw == boolean.class || raw == Boolean.class) {
             requireTag(field, TypeTag.BOOLEAN, "a boolean", path);
             return field.asBoolean();
         }
-        if (isNumber(target)) {
+        if (isNumber(raw)) {
             requireTag(field, TypeTag.NUMBER, "a number", path);
-            return numberAs(field, target, path);
+            return numberAs(field, raw, path);
         }
-        if (target.isRecord()) {
+        if (raw.isEnum()) {
+            requireTag(field, TypeTag.STRING, "a string", path);
+            return enumValue(raw, field.asText(), path);
+        }
+        if (raw.isRecord()) {
             requireTag(field, TypeTag.OBJECT, "an object", path);
-            return fromNode(field, target, path);
+            return recordFrom(field, raw.asSubclass(java.lang.Record.class), path);
         }
-        throw new JsonBindException("unsupported component type " + target.getSimpleName()
-                + " (collections, enums, and POJOs land with M3-T3)", path);
+        if (raw == Object.class) {
+            return naturalValue(field, path);
+        }
+        if (!raw.isInterface() && !java.lang.reflect.Modifier.isAbstract(raw.getModifiers())) {
+            return pojoFrom(field, raw, path);
+        }
+        throw new JsonBindException("polymorphic binding is not supported for " + raw.getSimpleName(), path);
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static Enum enumValue(Class<?> raw, String text, String path) {
+        try {
+            return Enum.valueOf((Class<? extends Enum>) raw, text);
+        } catch (IllegalArgumentException unknownName) {
+            throw new JsonBindException("unknown enum name '" + text
+                    + "' for " + raw.getSimpleName(), path);
+        }
+    }
+
+    /** Jackson-parity natural mapping for untyped Object elements. */
+    private static Object naturalValue(Node field, String path) {
+        return switch (field.type()) {
+            case STRING -> field.asText();
+            case BOOLEAN -> field.asBoolean();
+            case NULL -> null;
+            case NUMBER -> naturalNumber(field, path);
+            case ARRAY -> {
+                List<Object> out = new java.util.ArrayList<>();
+                List<Node> elements = field.elements();
+                for (int i = 0; i < elements.size(); i++) {
+                    out.add(naturalValue(elements.get(i), path + "[" + i + "]"));
+                }
+                yield out;
+            }
+            case OBJECT -> {
+                Map<String, Object> out = new java.util.LinkedHashMap<>();
+                for (String key : field.keys()) {
+                    out.put(key, naturalValue(field.get(key), path + "." + key));
+                }
+                yield out;
+            }
+        };
+    }
+
+    private static Object naturalNumber(Node field, String path) {
+        String text = field.numberText();
+        if (text.matches("-?\\d+")) {
+            try {
+                return Long.valueOf(text);
+            } catch (NumberFormatException beyondLong) {
+                return new BigDecimal(text);
+            }
+        }
+        double d = field.asDouble();
+        if (Double.isInfinite(d)) {
+            return field.asDecimal();
+        }
+        return d;
     }
 
     private static boolean isNumber(Class<?> target) {
@@ -160,7 +335,7 @@ public final class Bind {
         }
     }
 
-    // --- value → record (write direction) ---
+    // --- value → Node (write direction) ---
 
     private static Node toNode(Object value, String path) {
         if (value == null) {
@@ -190,11 +365,39 @@ public final class Bind {
         if (value instanceof BigInteger big) {
             return Node.of(new BigDecimal(big));
         }
+        if (value instanceof BigDecimal d) {
+            return Node.of(d);
+        }
         if (value instanceof Boolean b) {
             return Node.of(b);
         }
-        if (value instanceof BigDecimal d) {
-            return Node.of(d);
+        if (value instanceof Enum<?> e) {
+            return Node.of(e.name());
+        }
+        if (value instanceof Node n) {
+            return n;
+        }
+        if (value instanceof List<?> list) {
+            Node array = Node.array();
+            for (int i = 0; i < list.size(); i++) {
+                array.add(toNode(list.get(i), path + "[" + i + "]"));
+            }
+            return array;
+        }
+        if (value instanceof Map<?, ?> map) {
+            Node object = Node.object();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                object.put(String.valueOf(entry.getKey()), toNode(entry.getValue(), path + "." + entry.getKey()));
+            }
+            return object;
+        }
+        if (value.getClass().isArray()) {
+            Node array = Node.array();
+            int length = java.lang.reflect.Array.getLength(value);
+            for (int i = 0; i < length; i++) {
+                array.add(toNode(java.lang.reflect.Array.get(value, i), path + "[" + i + "]"));
+            }
+            return array;
         }
         if (value instanceof java.lang.Record record) {
             Node object = Node.object();
@@ -208,7 +411,34 @@ public final class Bind {
             }
             return object;
         }
-        throw new JsonBindException("unsupported value type " + value.getClass().getName()
-                + " (lands with M3-T2/M3-T3)", path);
+        return pojoToNode(value, path);
+    }
+
+    /** POJO serialization via public getters (getX and isX); property name from the accessor. */
+    private static Node pojoToNode(Object value, String path) {
+        Node object = Node.object();
+        for (java.lang.reflect.Method method : value.getClass().getMethods()) {
+            String name = method.getName();
+            if (method.getParameterCount() != 0 || java.lang.reflect.Modifier.isStatic(method.getModifiers())
+                    || method.getDeclaringClass() == Object.class) {
+                continue;
+            }
+            String property = null;
+            if (name.startsWith("get") && name.length() > 3) {
+                property = Character.toLowerCase(name.charAt(3)) + name.substring(4);
+            } else if (name.startsWith("is") && name.length() > 2
+                    && method.getReturnType() == boolean.class) {
+                property = Character.toLowerCase(name.charAt(2)) + name.substring(3);
+            }
+            if (property == null) {
+                continue;
+            }
+            try {
+                object.put(property, toNode(method.invoke(value), path + "." + property));
+            } catch (ReflectiveOperationException e) {
+                throw new JsonBindException("cannot read property " + property, path);
+            }
+        }
+        return object;
     }
 }
