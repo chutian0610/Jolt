@@ -7,6 +7,7 @@ import io.github.chutian0610.jolt.tree.Tree;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.RecordComponent;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 
 /**
  * The binding facade: JSON ↔ records via the tree layer. Parsing loads through the verified
@@ -69,32 +70,85 @@ public final class Bind {
             }
             return null;
         }
+        if (field.type() == TypeTag.NULL) {
+            // JSON null binds as Java null — except primitives, which have no null.
+            if (target.isPrimitive()) {
+                throw new JsonBindException("JSON null for primitive component " + target.getSimpleName(), path);
+            }
+            return null;
+        }
         if (target == String.class) {
             requireTag(field, TypeTag.STRING, "a string", path);
             return field.asText();
-        }
-        if (target == long.class || target == Long.class) {
-            requireTag(field, TypeTag.NUMBER, "a number", path);
-            try {
-                return field.asLong();
-            } catch (ArithmeticException beyondLong) {
-                throw new JsonBindException("number does not fit in a long", path);
-            }
-        }
-        if (target == int.class || target == Integer.class) {
-            requireTag(field, TypeTag.NUMBER, "a number", path);
-            try {
-                return Math.toIntExact(field.asLong());
-            } catch (ArithmeticException beyondInt) {
-                throw new JsonBindException("number does not fit in an int", path);
-            }
         }
         if (target == boolean.class || target == Boolean.class) {
             requireTag(field, TypeTag.BOOLEAN, "a boolean", path);
             return field.asBoolean();
         }
+        if (isNumber(target)) {
+            requireTag(field, TypeTag.NUMBER, "a number", path);
+            return numberAs(field, target, path);
+        }
+        if (target.isRecord()) {
+            requireTag(field, TypeTag.OBJECT, "an object", path);
+            return fromNode(field, target, path);
+        }
         throw new JsonBindException("unsupported component type " + target.getSimpleName()
-                + " (lands with M3-T2)", path);
+                + " (collections, enums, and POJOs land with M3-T3)", path);
+    }
+
+    private static boolean isNumber(Class<?> target) {
+        return target == byte.class || target == Byte.class
+                || target == short.class || target == Short.class
+                || target == int.class || target == Integer.class
+                || target == long.class || target == Long.class
+                || target == float.class || target == Float.class
+                || target == double.class || target == Double.class
+                || target == BigDecimal.class || target == BigInteger.class;
+    }
+
+    private static Object numberAs(Node field, Class<?> target, String path) {
+        if (target == BigDecimal.class) {
+            return field.asDecimal();
+        }
+        if (target == BigInteger.class) {
+            try {
+                return field.asDecimal().toBigIntegerExact();
+            } catch (ArithmeticException lossy) {
+                throw new JsonBindException("number is not a whole number", path);
+            }
+        }
+        if (target == float.class || target == Float.class) {
+            return field.asDecimal().floatValue();
+        }
+        if (target == double.class || target == Double.class) {
+            return field.asDecimal().doubleValue();
+        }
+        long value;
+        try {
+            value = field.asLong();
+        } catch (ArithmeticException beyondLong) {
+            throw new JsonBindException("number does not fit in a long", path);
+        }
+        long bound = switch (target.getSimpleName()) {
+            case "byte", "Byte" -> Byte.MAX_VALUE;
+            case "short", "Short" -> Short.MAX_VALUE;
+            case "int", "Integer" -> Integer.MAX_VALUE;
+            default -> Long.MAX_VALUE;
+        };
+        if (value > bound || value < -bound - (bound == Long.MAX_VALUE ? 0 : 1)) {
+            throw new JsonBindException("number does not fit in " + target.getSimpleName(), path);
+        }
+        if (target == byte.class || target == Byte.class) {
+            return (byte) value;
+        }
+        if (target == short.class || target == Short.class) {
+            return (short) value;
+        }
+        if (target == int.class || target == Integer.class) {
+            return (int) value;
+        }
+        return value;
     }
 
     /** Strict binding: the JSON type must match the target — mismatch is a mapping error,
