@@ -96,6 +96,7 @@ public final class GenPlan<T> {
                 out.add(method);
             }
         }
+        out.sort(java.util.Comparator.comparing(Method::getName));
         return out.toArray(new Method[0]);
     }
 

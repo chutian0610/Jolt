@@ -78,30 +78,44 @@ public final class GeneratedBinders {
                 .make()
                 .load(GeneratedBinders.class.getClassLoader())
                 .getLoaded();
+        GenBinderBase binder;
         try {
-            GenBinderBase binder = (GenBinderBase) rawGenerated.getDeclaredConstructor().newInstance();
+            binder = (GenBinderBase) rawGenerated.getDeclaredConstructor().newInstance();
             binder.assignPlan(plan);
-            cascade(plan);
-            return (TypedBinder<T>) binder;
+            // register BEFORE cascading: self-referential records terminate via the cache
+            CACHE.put(type, binder);
+            io.github.chutian0610.jolt.bind.Bind.registerGenerated(type, (TypedBinder<T>) binder);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("generated binder could not be instantiated", e);
         }
+        cascade(plan);
+        return (TypedBinder<T>) binder;
     }
 
     /** Generates binders for nested record/POJO component types (recursion-safe via cache). */
     private static void cascade(GenPlan<?> plan) {
         for (java.lang.reflect.Type genericType : plan.genericTypes) {
-            Class<?> raw = rawClass(genericType);
-            if (isBindable(raw)) {
-                forType(raw);
-            }
+            cascadeType(genericType);
         }
         for (Method accessor : plan.accessors) {
-            Class<?> raw = accessor.getReturnType();
-            if (isBindable(raw)) {
-                forType(raw);
+            cascadeType(accessor.getGenericReturnType());
+        }
+    }
+
+    private static void cascadeType(java.lang.reflect.Type type) {
+        if (type instanceof Class<?> c) {
+            if (isBindable(c)) {
+                forType(c);
+            }
+            return;
+        }
+        if (type instanceof java.lang.reflect.ParameterizedType parameterized) {
+            // List<Item> / Map<String, Item>: the ITEM type is the bindable one
+            for (java.lang.reflect.Type argument : parameterized.getActualTypeArguments()) {
+                cascadeType(argument);
             }
         }
+        // GenericArrayType (X[][]) falls through: component bindability resolves on the inner level
     }
 
     private static boolean isBindable(Class<?> raw) {
@@ -110,16 +124,6 @@ public final class GeneratedBinders {
                 && !raw.getName().startsWith("java.")
                 && (raw.isRecord()
                     || (!raw.isInterface() && !Modifier.isAbstract(raw.getModifiers())));
-    }
-
-    private static Class<?> rawClass(java.lang.reflect.Type type) {
-        if (type instanceof Class<?> c) {
-            return c.isArray() ? null : c;
-        }
-        if (type instanceof java.lang.reflect.ParameterizedType parameterized) {
-            return (Class<?>) parameterized.getRawType();
-        }
-        return null;
     }
 
     @SuppressWarnings("unchecked")

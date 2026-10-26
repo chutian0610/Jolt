@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -84,4 +85,17 @@ class GeneratedBindersTest {
     }
 
     record Point(int x, int y) {}
+
+    /** Self-referential record: cascade registration must terminate (T32-review bug pinned). */
+    record Linked(String name, Linked next) {}
+
+    @Test
+    void selfReferentialRecordsDoNotStackOverflow() {
+        Linked head = GeneratedBinders.forType(Linked.class).parse(
+                Tree.parse("{\"name\":\"a\",\"next\":{\"name\":\"b\",\"next\":null}}".getBytes(StandardCharsets.UTF_8)),
+                "$", BindConfig.defaults());
+        assertEquals("a", head.name());
+        assertEquals("b", head.next().name());
+        assertNull(head.next().next());
+    }
 }

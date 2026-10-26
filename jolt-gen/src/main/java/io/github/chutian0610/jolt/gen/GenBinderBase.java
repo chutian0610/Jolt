@@ -97,7 +97,7 @@ public class GenBinderBase implements TypedBinder<Object>, GeneratedFields {
         } catch (ReflectiveOperationException e) {
             throw new JsonBindException("cannot instantiate " + plan.type.getName(), path);
         }
-        for (Method setter : setters()) {
+        for (Method setter : plan.setters) {
             String mn = setter.getName();
             String key = Character.toLowerCase(mn.charAt(3)) + mn.substring(4);
             Node value = node.get(key);
@@ -125,22 +125,6 @@ public class GenBinderBase implements TypedBinder<Object>, GeneratedFields {
         return instance;
     }
 
-    private List<Method> setters() {
-        List<Method> out = new java.util.ArrayList<>();
-        for (Method method : plan.type.getMethods()) {
-            String mn = method.getName();
-            String key = mn.startsWith("set") && mn.length() > 3
-                    ? Character.toLowerCase(mn.charAt(3)) + mn.substring(4) : mn;
-            if (mn.startsWith("set")
-                    && method.getReturnType() == void.class
-                    && method.getParameterCount() == 1
-                    && java.lang.reflect.Modifier.isPublic(method.getModifiers())
-                    && plan.nameSet.contains(key)) {
-                out.add(method);
-            }
-        }
-        return out;
-    }
 
     private static String propertyName(String accessorName) {
         int prefix = accessorName.startsWith("is") ? 2 : 3;
