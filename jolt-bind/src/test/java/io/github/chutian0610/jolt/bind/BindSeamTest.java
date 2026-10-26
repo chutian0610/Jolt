@@ -48,16 +48,16 @@ class BindSeamTest {
     }
 
     @Test
-    void inaccessibleTargetsFailDiagnostically() throws Exception {
-        // A package-private record in a DIFFERENT package cannot be constructed by Bind —
-        // the failure must be diagnostic (with the reflection cause), never a raw
-        // IllegalAccessException.
+    void packagePrivateCrossPackageTargetsAreConstructible() throws Exception {
+        // Reflective binders defeat accessibility (setAccessible — Jackson-standard):
+        // a package-private record in a DIFFERENT package binds successfully.
         @SuppressWarnings("unchecked")
         Class<? extends java.lang.Record> hidden =
                 (Class<? extends java.lang.Record>) Class.forName(
                         "io.github.chutian0610.jolt.bind.hidden.HiddenRecord");
-        var e = org.junit.jupiter.api.Assertions.assertThrows(JsonBindException.class,
-                () -> Bind.parse(utf8("{\"v\":1}"), hidden));
-        assertTrue(e.getMessage().contains("cannot construct"), e.getMessage());
+        java.lang.Record record = Bind.parse(utf8("{\"v\":1}"), hidden);
+        var accessor = hidden.getRecordComponents()[0].getAccessor();
+        accessor.setAccessible(true); // the probe itself crosses the package boundary
+        assertEquals(1, (int) (Integer) accessor.invoke(record));
     }
 }

@@ -27,7 +27,7 @@ public final class BindConfig {
         return FAIL_ON_UNKNOWN;
     }
 
-    boolean failOnUnknown() {
+    public boolean failOnUnknown() {
         return failOnUnknown;
     }
 }

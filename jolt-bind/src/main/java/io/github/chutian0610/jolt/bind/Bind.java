@@ -78,6 +78,31 @@ public final class Bind {
         return ReflectiveBinder.forClass(type);
     }
 
+    // Generated binders registered by jolt-gen (M4): consulted BEFORE the reflective cache so
+    // nested record/POJO values route to generated code when present. Registration is the
+    // forward direction — jolt-bind never depends on jolt-gen (ADR-0004).
+    private static final Map<Class<?>, TypedBinder<?>> GENERATED = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Registers a generated binder for {@code type} (called by jolt-gen only). */
+    public static <T> void registerGenerated(Class<T> type, TypedBinder<T> binder) {
+        GENERATED.put(type, binder);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> TypedBinder<T> generatedFor(Class<T> type) {
+        return (TypedBinder<T>) GENERATED.get(type);
+    }
+
+    /** Test-visible registered lookup (same map the nested routing consults). */
+    public static TypedBinder<?> generatedLookupForTest(Class<?> type) {
+        return GENERATED.get(type);
+    }
+
+    /** A reflective {@link TypedBinder} for {@code type} — the public fallback entry point. */
+    public static <T> TypedBinder<T> reflectiveBinder(Class<T> type) {
+        return ReflectiveBinder.forClass(type);
+    }
+
     // --- record/POJO → value (parse direction) ---
 
     @SuppressWarnings("unchecked")
@@ -85,7 +110,11 @@ public final class Bind {
         return (T) binderFor(type).parse(node, path, config);
     }
 
-    static Object toValue(Node field, java.lang.reflect.Type target, String path, BindConfig config) {
+    /**
+     * The strict component-value conversion shared by every bind adapter (reflective and
+     * generated): the JSON type must match the target, failures carry the path.
+     */
+    public static Object toValue(Node field, java.lang.reflect.Type target, String path, BindConfig config) {
         // Missing and JSON null are different states with one shared rule: reference kinds read
         // as Java null, primitive targets reject (never a silent zero).
         if (field == null || field.type() == TypeTag.NULL) {
@@ -173,14 +202,21 @@ public final class Bind {
             requireTag(field, TypeTag.STRING, "a string", path);
             return enumValue(raw, field.asText(), path);
         }
+        TypedBinder<?> generated = generatedFor(raw);
         if (raw.isRecord()) {
             requireTag(field, TypeTag.OBJECT, "an object", path);
+            if (generated != null) {
+                return generated.parse(field, path, config);
+            }
             return binderFor(raw.asSubclass(java.lang.Record.class)).parse(field, path, config);
         }
         if (raw == Object.class) {
             return naturalValue(field, path);
         }
         if (!raw.isInterface() && !java.lang.reflect.Modifier.isAbstract(raw.getModifiers())) {
+            if (generated != null) {
+                return generated.parse(field, path, config);
+            }
             return binderFor(raw).parse(field, path, config);
         }
         throw new JsonBindException("polymorphic binding is not supported for " + raw.getSimpleName(), path);
@@ -322,6 +358,12 @@ public final class Bind {
 
 
 
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static void writeUnchecked(TypedBinder<?> binder, Object value, JoltWriter writer) {
+        ((TypedBinder) binder).write(value, writer);
+    }
+
     /** Structural kinds dispatch through their cached binders; the rest are scalars. */
     private static boolean isStructure(Object value) {
         return value instanceof List<?> || value instanceof Map<?, ?> || value.getClass().isArray()
@@ -330,7 +372,11 @@ public final class Bind {
                      || value instanceof Boolean);
     }
 
-    static void writeTo(Object value, JoltWriter writer, String path) {
+    /**
+     * The shared write emission for any value (scalars, collections, record/POJO via its
+     * binder) — the contract every bind adapter writes through.
+     */
+    public static void writeTo(Object value, JoltWriter writer, String path) {
         if (value == null) {
             writer.nullValue();
             return;
@@ -346,7 +392,12 @@ public final class Bind {
                 // records and POJOs dispatch through their cached binders (fields only —
                 // the value position owns its braces)
                 writer.startObject();
-                ReflectiveBinder.writeFieldsVia(value, raw, writer, path);
+                TypedBinder<?> generated = generatedFor(raw);
+                if (generated != null) {
+                    writeUnchecked(generated, value, writer);
+                } else {
+                    ReflectiveBinder.writeFieldsVia(value, raw, writer, path);
+                }
                 writer.endObject();
                 return;
             }

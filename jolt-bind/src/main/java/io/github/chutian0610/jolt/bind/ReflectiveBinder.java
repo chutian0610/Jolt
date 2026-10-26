@@ -42,6 +42,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
         this.type = type;
         if (type.isRecord()) {
             this.constructor = canonicalConstructor(type);
+            this.constructor.setAccessible(true);
             this.components = type.getRecordComponents();
             this.componentTypes = componentTypes(components);
             this.setters = null;
@@ -49,6 +50,9 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
             return;
         }
         this.constructor = genericNoArgConstructor(type);
+        if (this.constructor != null) {
+            this.constructor.setAccessible(true);
+        }
         if (constructor == null) {
             throw new JsonBindException(type.getName()
                     + " has no public no-arg constructor and is not a record", "$");
@@ -57,6 +61,17 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
         this.componentTypes = null;
         this.setters = setterTable(type);
         this.accessors = accessorTable(type);
+        for (Method setter : setters) {
+            setter.setAccessible(true); // package-private declaring classes (T31 fallback)
+        }
+        for (Method accessor : accessors) {
+            accessor.setAccessible(true);
+        }
+        if (components != null) {
+            for (RecordComponent component : components) {
+                component.getAccessor().setAccessible(true);
+            }
+        }
     }
 
     @Override
