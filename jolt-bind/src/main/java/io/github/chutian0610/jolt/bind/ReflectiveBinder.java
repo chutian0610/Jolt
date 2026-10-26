@@ -45,6 +45,9 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
             this.constructor.setAccessible(true);
             this.components = type.getRecordComponents();
             this.componentTypes = componentTypes(components);
+            for (RecordComponent component : components) {
+                component.getAccessor().setAccessible(true); // package-private declaring classes
+            }
             this.setters = null;
             this.accessors = null;
             return;

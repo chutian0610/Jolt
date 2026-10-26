@@ -359,10 +359,6 @@ public final class Bind {
 
 
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private static void writeUnchecked(TypedBinder<?> binder, Object value, JoltWriter writer) {
-        ((TypedBinder) binder).write(value, writer);
-    }
 
     /** Structural kinds dispatch through their cached binders; the rest are scalars. */
     private static boolean isStructure(Object value) {
@@ -393,8 +389,8 @@ public final class Bind {
                 // the value position owns its braces)
                 writer.startObject();
                 TypedBinder<?> generated = generatedFor(raw);
-                if (generated != null) {
-                    writeUnchecked(generated, value, writer);
+                if (generated instanceof GeneratedFields generatedFields) {
+                    generatedFields.writeFields(value, writer, path);
                 } else {
                     ReflectiveBinder.writeFieldsVia(value, raw, writer, path);
                 }

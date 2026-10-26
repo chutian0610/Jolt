@@ -21,7 +21,8 @@ public final class GenPlan<T> {
     final String[] names;
     final java.util.Set<String> nameSet;
     final Type[] genericTypes;
-    final Method[] accessors; // write side: one accessor per component (records); getters (POJOs)
+    final Method[] accessors; // write side: component accessors (records); getters (POJOs)
+    final List<Method> setters;    // POJO parse side: setters sorted by name
 
     @SuppressWarnings("unchecked")
     GenPlan(Class<T> type) {
@@ -46,12 +47,14 @@ public final class GenPlan<T> {
                 throw new IllegalArgumentException("record without canonical constructor: " + type.getName(), e);
             }
             this.nameSet = java.util.Set.of(names);
+            this.setters = List.of();
             return;
         }
         this.isRecord = false;
         this.accessors = getters(type);
         this.names = setterNames(type);
         this.nameSet = java.util.Set.of(this.names);
+        this.setters = setterMethods(type);
         this.genericTypes = new Type[0];
         try {
             this.constructor = type.getConstructor();
@@ -94,5 +97,20 @@ public final class GenPlan<T> {
             }
         }
         return out.toArray(new Method[0]);
+    }
+
+    /** Setters sorted by name: the POJO parse loop's metadata. */
+    private static List<Method> setterMethods(Class<?> type) {
+        List<Method> out = new java.util.ArrayList<>();
+        for (Method method : type.getMethods()) {
+            if (method.getName().startsWith("set")
+                    && method.getReturnType() == void.class
+                    && method.getParameterCount() == 1
+                    && java.lang.reflect.Modifier.isPublic(method.getModifiers())) {
+                out.add(method);
+            }
+        }
+        out.sort(java.util.Comparator.comparing(Method::getName));
+        return out;
     }
 }

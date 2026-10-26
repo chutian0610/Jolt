@@ -4,6 +4,7 @@ import io.github.chutian0610.jolt.JoltWriter;
 import io.github.chutian0610.jolt.bind.Bind;
 import io.github.chutian0610.jolt.bind.BindConfig;
 import io.github.chutian0610.jolt.bind.JsonBindException;
+import io.github.chutian0610.jolt.bind.GeneratedFields;
 import io.github.chutian0610.jolt.bind.TypedBinder;
 import io.github.chutian0610.jolt.tree.Node;
 
