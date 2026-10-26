@@ -11,9 +11,18 @@ import io.github.chutian0610.jolt.tree.Node;
  */
 public interface TypedBinder<T> {
 
-    /** Constructs an instance of {@code T} from a loaded node tree. */
+    /**
+     * Constructs an instance of {@code T} from a loaded node tree. Implementations must apply
+     * the strict-binding contract (type matches target, no wide conversions), honor
+     * {@code config} (including fail-on-unknown), report failures as {@link JsonBindException}
+     * with the {@code $}-rooted path, and let core parse errors surface unchanged.
+     */
     T parse(Node node, String path, BindConfig config);
 
-    /** Writes {@code value} as compact JSON through the core writer. */
+    /**
+     * Writes {@code value} as a COMPLETE compact JSON document through the core writer — the
+     * implementation owns the enclosing object braces. Nested values go through
+     * {@code Bind.writeTo} so both adapters share the escaping and verbatim-number semantics.
+     */
     void write(T value, JoltWriter writer);
 }

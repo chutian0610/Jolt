@@ -19,7 +19,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * and write loops never re-derive reflection per call.
  *
  * <p>Instances are obtained through {@code Bind.binderFor} (cached per class for the JVM's
- * life) and are not thread-safe as shared mutable parse state lives on the caller's stack only.
+ * life). Parse state lives on the caller's stack — binders carry no mutable per-document state,
+ * so a binder may be shared across threads that each run their own parse.
  */
 final class ReflectiveBinder<T> implements TypedBinder<T> {
 
@@ -155,7 +156,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
                     writer.fieldName(component.getName());
                     Bind.writeTo(fieldValue, writer, path + "." + component.getName());
                 } catch (ReflectiveOperationException e) {
-                    throw new JsonBindException("cannot read component " + component.getName());
+                    throw new JsonBindException("cannot read component " + component.getName(), path);
                 }
             }
             return;
@@ -167,7 +168,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
                 writer.fieldName(property);
                 Bind.writeTo(fieldValue, writer, path + "." + property);
             } catch (ReflectiveOperationException e) {
-                throw new JsonBindException("cannot read property " + property);
+                throw new JsonBindException("cannot read property " + property, path);
             }
         }
     }
