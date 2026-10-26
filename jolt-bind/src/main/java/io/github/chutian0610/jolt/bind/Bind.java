@@ -162,17 +162,13 @@ public final class Bind {
     // --- value dispatch (parse) ---
 
     private static Object toValue(Node field, java.lang.reflect.Type target, String path, BindConfig config) {
-        if (field == null) {
-            // Missing: reference kinds (collections, enums, records, POJOs, boxes) read null.
+        // Missing and JSON null are different states with one shared rule: reference kinds read
+        // as Java null, primitive targets reject (never a silent zero).
+        if (field == null || field.type() == TypeTag.NULL) {
+            boolean missing = field == null;
             if (target instanceof Class<?> raw && raw.isPrimitive()) {
-                throw new JsonBindException("missing value for primitive component " + raw.getSimpleName(), path);
-            }
-            return null;
-        }
-        if (field.type() == TypeTag.NULL) {
-            // JSON null: collections, enums, and other reference kinds read as Java null.
-            if (target instanceof Class<?> raw && raw.isPrimitive()) {
-                throw new JsonBindException("JSON null for primitive component " + raw.getSimpleName(), path);
+                throw new JsonBindException((missing ? "missing value for" : "JSON null for")
+                        + " primitive component " + raw.getSimpleName(), path);
             }
             return null;
         }
@@ -401,42 +397,24 @@ public final class Bind {
         if (value == null) {
             return Node.nullValue();
         }
-        if (value instanceof String s) {
-            return Node.of(s);
-        }
-        if (value instanceof Long l) {
-            return Node.of(l);
-        }
-        if (value instanceof Integer i) {
-            return Node.of((long) i);
-        }
-        if (value instanceof Byte b) {
-            return Node.of((long) b);
-        }
-        if (value instanceof Short sh) {
-            return Node.of((long) sh);
-        }
-        if (value instanceof Float f) {
-            return Node.of((double) f);
-        }
-        if (value instanceof Double d) {
-            return Node.of(d);
-        }
-        if (value instanceof BigInteger big) {
-            return Node.of(new BigDecimal(big));
-        }
-        if (value instanceof BigDecimal d) {
-            return Node.of(d);
-        }
-        if (value instanceof Boolean b) {
-            return Node.of(b);
-        }
-        if (value instanceof Enum<?> e) {
-            return Node.of(e.name());
-        }
         if (value instanceof Node n) {
             return n;
         }
+        if (isStructure(value)) {
+            return nodeFromStructure(value, path);
+        }
+        return nodeFromScalar(value, path);
+    }
+
+    /** Write mirror of {@code toScalarOrStructure}: enums and POJOs are structural here. */
+    private static boolean isStructure(Object value) {
+        return value instanceof List<?> || value instanceof Map<?, ?> || value.getClass().isArray()
+                || value instanceof java.lang.Record || value instanceof Enum<?>
+                || !(value instanceof String || value instanceof Number
+                     || value instanceof Boolean);
+    }
+
+    private static Node nodeFromStructure(Object value, String path) {
         if (value instanceof List<?> list) {
             Node array = Node.array();
             for (int i = 0; i < list.size(); i++) {
@@ -471,7 +449,46 @@ public final class Bind {
             }
             return object;
         }
+        if (value instanceof Enum<?> e) {
+            return Node.of(e.name());
+        }
         return pojoToNode(value, path);
+    }
+
+    /** Write mirror of the scalar families: numeric widths, text, boolean. */
+    private static Node nodeFromScalar(Object value, String path) {
+        if (value instanceof String s) {
+            return Node.of(s);
+        }
+        if (value instanceof Boolean b) {
+            return Node.of(b);
+        }
+        if (value instanceof BigDecimal d) {
+            return Node.of(d);
+        }
+        if (value instanceof BigInteger big) {
+            return Node.of(new BigDecimal(big));
+        }
+        // Integer/Byte/Short/Long widen to the long fast path; Float widens to double.
+        if (value instanceof Integer i) {
+            return Node.of((long) i);
+        }
+        if (value instanceof Byte b) {
+            return Node.of((long) b);
+        }
+        if (value instanceof Short sh) {
+            return Node.of((long) sh);
+        }
+        if (value instanceof Long l) {
+            return Node.of(l);
+        }
+        if (value instanceof Float f) {
+            return Node.of((double) f);
+        }
+        if (value instanceof Double d) {
+            return Node.of(d);
+        }
+        throw new JsonBindException("unsupported value type " + value.getClass().getName(), path);
     }
 
     /**

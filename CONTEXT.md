@@ -42,6 +42,12 @@ The binding facade: `Bind.parse(json, Type)` constructs records/POJOs from JSON;
 **JsonBindException**:
 The binding failure: a runtime exception carrying the JSON path (`$.user.tags[2]`), distinct from `JsonParseException` — parse errors are syntax, bind errors are data mapping. Two layers, two exceptions.
 
+**jolt-gen**:
+The optional generated-binding module (M4): runtime-generates a dedicated binder class per target type via ByteBuddy. An optional artifact — the core, tree, and bind modules never depend on it.
+
+**TypedBinder**:
+The binding seam: parse (from a Node) and write (to a JoltWriter) for one target type. Two adapters: `ReflectiveBinder` (jolt-bind, metadata cached per type) and the generated binders (jolt-gen). The `Bind` facade dispatches across both.
+
 **Strict binding**:
 No wide conversions: the JSON type must match the target ("42" does not bind to int). Missing reference components read as null (the constructor decides); missing or null values for primitive components throw.
 
