@@ -43,7 +43,10 @@ The binding facade: `Bind.parse(json, Type)` constructs records/POJOs from JSON;
 The binding failure: a runtime exception carrying the JSON path (`$.user.tags[2]`), distinct from `JsonParseException` — parse errors are syntax, bind errors are data mapping. Two layers, two exceptions.
 
 **jolt-gen**:
-The optional generated-binding module (M4): runtime-generates a dedicated binder class per target type via ByteBuddy. An optional artifact — the core, tree, and bind modules never depend on it.
+The optional generated-binding module (M4/M5): runtime-generates a dedicated binder class per target type via ByteBuddy, with M5 specialization inlining component accessors and strict checks directly into the generated parse/write bytecode. An optional artifact — the core, tree, and bind modules never depend on it.
+
+**Specialization**:
+The M5 upgrade: generated binders emit per-component straight-line bytecode (accessor calls, inlined strict checks, writer.fieldName constants) instead of delegating to plan execution. The bar: parse ≥ 2×, write ≥ 1.5× over the reflective path, measured on the M4 baseline.
 
 **TypedBinder**:
 The binding seam: parse (from a Node) and write (to a JoltWriter) for one target type. Two adapters: `ReflectiveBinder` (jolt-bind, metadata cached per type) and the generated binders (jolt-gen). The `Bind` facade dispatches across both.
