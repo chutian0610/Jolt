@@ -10,6 +10,8 @@ import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -18,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  */
 class GeneratedBinderErrorMatrixTest {
 
-    record Item(String sku, int quantity, java.math.BigDecimal price) {}
+    public record Item(String sku, int quantity, java.math.BigDecimal price) {}
 
     private static final String DOC =
             "{\"sku\":\"s1\",\"quantity\":2,\"price\":1.50}";
@@ -27,9 +29,15 @@ class GeneratedBinderErrorMatrixTest {
 
     private static Item parse(String json, BindConfig config) {
         TypedBinder<Item> binder = GeneratedBinders.forType(Item.class);
+        // The generated path is the thing under test — a reflective fallback would silently
+        // gut this gate.
+        assertTrue(binder.getClass().getName().startsWith("io.github.chutian0610.jolt.gen.Gen$"),
+                "expected a GENERATED binder, got reflective fallback: "
+                        + binder.getClass().getName());
         return binder.parse(
                 Tree.parse(json.getBytes(StandardCharsets.UTF_8)), "$", config);
     }
+
 
     @Test
     void unknownFieldIgnoredByDefaultThrownWhenEnabled() {
@@ -56,7 +64,4 @@ class GeneratedBinderErrorMatrixTest {
         assertEquals("$.quantity", e.getPath());
     }
 
-    private static void assertTrue(boolean condition, String message) {
-        org.junit.jupiter.api.Assertions.assertTrue(condition, message);
-    }
 }
