@@ -258,7 +258,7 @@ final class RecordSpecializer {
                                     "valueOf", "(Z)Ljava/lang/Boolean;", false);
                         });
                 case NUMBER -> emitScalar(mv, slots, i, name, "NUMBER", "a number",
-                        prefix -> emitNumberRead(mv, slots, raw, name, prefix));
+                        prefix -> emitNumberRead(mv, slots, raw, name, prefix, false));
                 case ENUM -> emitScalar(mv, slots, i, name, "STRING", "a string",
                         prefix -> emitEnumRead(mv, slots, raw, name, prefix));
                 case CHILD -> emitChild(mv, slots, i, raw);

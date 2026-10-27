@@ -170,9 +170,11 @@ final class Emit {
         mv.visitInsn(Opcodes.ATHROW);
     }
 
-    /** The numeric family: per-width read with the exact Bind semantics. */
+    /** The numeric family: per-width read with the exact Bind semantics. With
+     * {@code keepPrimitive} the value stays an unboxed primitive on the stack (direct setter
+     * invoke for primitive parameters); otherwise it is boxed for the args array. */
     static void emitNumberRead(MethodVisitor mv, FrameTracker slots, Class<?> raw,
-                               String name, Object[] stackPrefix) {
+                               String name, Object[] stackPrefix, boolean keepPrimitive) {
         switch (raw.getName()) {
             case "java.math.BigDecimal" -> asDecimal(mv);
             case "java.math.BigInteger" -> {
@@ -200,17 +202,21 @@ final class Emit {
                 asDecimal(mv);
                 mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/math/BigDecimal",
                         "floatValue", "()F", false);
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Float", "valueOf",
-                        "(F)Ljava/lang/Float;", false);
+                if (!keepPrimitive) {
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Float", "valueOf",
+                            "(F)Ljava/lang/Float;", false);
+                }
             }
             case "double", "java.lang.Double" -> {
                 asDecimal(mv);
                 mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/math/BigDecimal",
                         "doubleValue", "()D", false);
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Double", "valueOf",
-                        "(D)Ljava/lang/Double;", false);
+                if (!keepPrimitive) {
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Double", "valueOf",
+                            "(D)Ljava/lang/Double;", false);
+                }
             }
-            default -> emitIntegralRead(mv, slots, raw, name, stackPrefix);
+            default -> emitIntegralRead(mv, slots, raw, name, stackPrefix, keepPrimitive);
         }
     }
 
@@ -218,7 +224,7 @@ final class Emit {
      * The whole read works on the operand stack — no long locals, so no long locals in any
      * stack-map frame. */
     private static void emitIntegralRead(MethodVisitor mv, FrameTracker slots, Class<?> raw,
-                                         String name, Object[] stackPrefix) {
+                                         String name, Object[] stackPrefix, boolean keepPrimitive) {
         Label tryStart = new Label();
         Label tryEnd = new Label();
         Label handler = new Label();
@@ -270,29 +276,54 @@ final class Emit {
             case "byte", "java.lang.Byte" -> {
                 mv.visitInsn(Opcodes.L2I);
                 mv.visitInsn(Opcodes.I2B);
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Byte", "valueOf",
-                        "(B)Ljava/lang/Byte;", false);
-                boxed = "java/lang/Byte";
+                if (keepPrimitive) {
+                    boxed = null;
+                } else {
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Byte", "valueOf",
+                            "(B)Ljava/lang/Byte;", false);
+                    boxed = "java/lang/Byte";
+                }
             }
             case "short", "java.lang.Short" -> {
                 mv.visitInsn(Opcodes.L2I);
                 mv.visitInsn(Opcodes.I2S);
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Short", "valueOf",
-                        "(S)Ljava/lang/Short;", false);
-                boxed = "java/lang/Short";
+                if (keepPrimitive) {
+                    boxed = null;
+                } else {
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Short", "valueOf",
+                            "(S)Ljava/lang/Short;", false);
+                    boxed = "java/lang/Short";
+                }
             }
             case "int", "java.lang.Integer" -> {
                 mv.visitInsn(Opcodes.L2I);
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Integer", "valueOf",
-                        "(I)Ljava/lang/Integer;", false);
-                boxed = "java/lang/Integer";
+                if (keepPrimitive) {
+                    boxed = null;
+                } else {
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Integer", "valueOf",
+                            "(I)Ljava/lang/Integer;", false);
+                    boxed = "java/lang/Integer";
+                }
             }
             default -> {
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Long", "valueOf",
-                        "(J)Ljava/lang/Long;", false);
-                boxed = "java/lang/Long";
+                if (keepPrimitive) {
+                    boxed = null;
+                } else {
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Long", "valueOf",
+                            "(J)Ljava/lang/Long;", false);
+                    boxed = "java/lang/Long";
+                }
             }
         }
+        Object stackTop = keepPrimitive
+                ? (raw == long.class || raw == Long.class
+                        ? Opcodes.LONG
+                        : (raw == float.class || raw == Float.class
+                                ? Opcodes.FLOAT
+                                : (raw == double.class || raw == Double.class
+                                        ? Opcodes.DOUBLE
+                                        : Opcodes.INTEGER)))
+                : boxed;
         mv.visitJumpInsn(Opcodes.GOTO, uncaught);
         mv.visitLabel(handler);
         slots.emit(mv, "java/lang/ArithmeticException");
@@ -300,7 +331,7 @@ final class Emit {
         emitBindThrow(mv, () -> mv.visitLdcInsn("number does not fit in a long"),
                 () -> emitValuePath(mv, name));
         mv.visitLabel(uncaught);
-        slots.emit(mv, withStack(stackPrefix, boxed));
+        slots.emit(mv, withStack(stackPrefix, stackTop));
     }
 
     /** Strict tag + Enum.valueOf with the unknown-name handler (text kept in slot 6). */

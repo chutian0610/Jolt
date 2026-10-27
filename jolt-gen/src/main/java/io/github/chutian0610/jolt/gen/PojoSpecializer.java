@@ -221,6 +221,7 @@ final class PojoSpecializer {
             mv.visitVarInsn(Opcodes.ASTORE, 5);
             slots.set(5, NODE);
             Class<?> raw = rawOf(componentType(plan, i));
+            boolean paramPrimitive = setter.getParameterTypes()[0].isPrimitive();
             switch (kindOf(raw)) {
                 case STRING -> emitScalar(mv, slots, i, setter, name, "STRING", "a string",
                         () -> {
@@ -229,15 +230,24 @@ final class PojoSpecializer {
                                     "()Ljava/lang/String;", false);
                         });
                 case BOOLEAN -> emitScalar(mv, slots, i, setter, name, "BOOLEAN", "a boolean",
-                        () -> {
-                            mv.visitVarInsn(Opcodes.ALOAD, 5);
-                            mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, NODE, "asBoolean", "()Z",
-                                    false);
-                            mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Boolean",
-                                    "valueOf", "(Z)Ljava/lang/Boolean;", false);
-                        });
+                        paramPrimitive
+                                ? () -> {
+                                    mv.visitVarInsn(Opcodes.ALOAD, 5);
+                                    mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, NODE, "asBoolean",
+                                            "()Z", false);
+                                }
+                                : () -> {
+                                    mv.visitVarInsn(Opcodes.ALOAD, 5);
+                                    mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, NODE, "asBoolean",
+                                            "()Z", false);
+                                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Boolean",
+                                            "valueOf", "(Z)Ljava/lang/Boolean;", false);
+                                });
+                // the receiver is preloaded beneath the value — every frame inside the
+                // numeric read declares it as the stack base
                 case NUMBER -> emitScalar(mv, slots, i, setter, name, "NUMBER", "a number",
-                        () -> emitNumberRead(mv, slots, raw, name, new Object[0]));
+                        () -> emitNumberRead(mv, slots, raw, name,
+                                new Object[]{pojoInternal}, paramPrimitive));
                 case ENUM -> emitScalar(mv, slots, i, setter, name, "STRING", "a string",
                         () -> emitEnumRead(mv, slots, raw, name, new Object[0]));
                 case CHILD -> emitChild(mv, slots, i, setter, raw);
@@ -291,6 +301,9 @@ final class PojoSpecializer {
             mv.visitLabel(read);
             slots.emitFrom(mv, gateShape);
 
+            // the receiver is preloaded below the value: primitive parameters land directly
+            // on the stack (no boxing round-trip, no swap across category-two values)
+            mv.visitVarInsn(Opcodes.ALOAD, 4);
             valueEmit.run();
             invokeSetterOnStackTop(mv, slots, setter, name, setterDesc);
             mv.visitJumpInsn(Opcodes.GOTO, end);
@@ -304,6 +317,7 @@ final class PojoSpecializer {
                         () -> emitValuePath(mv, name));
             } else {
                 pinValueSlotsIfEnum(mv, i);
+                mv.visitVarInsn(Opcodes.ALOAD, 4);
                 mv.visitInsn(Opcodes.ACONST_NULL);
                 invokeSetterOnStackTop(mv, slots, setter, name, setterDesc);
                 mv.visitJumpInsn(Opcodes.GOTO, end);
@@ -355,6 +369,7 @@ final class PojoSpecializer {
                 mv.visitLabel(parse);
                 slots.emit(mv);
             }
+            mv.visitVarInsn(Opcodes.ALOAD, 4);
             mv.visitVarInsn(Opcodes.ALOAD, 0);
             mv.visitFieldInsn(Opcodes.GETFIELD, self, CHILD_FIELD_PREFIX + i,
                     TYPED_BINDER_FIELD_DESC);
@@ -405,8 +420,8 @@ final class PojoSpecializer {
         }
 
         /**
-         * Invokes the setter on the instance with the value ALREADY ON THE STACK TOP: the
-         * try region covers only ALOAD/SWAP/INVOKEVIRTUAL, so a throwing setter wraps as
+         * Invokes the setter with [receiver, value] ALREADY ON THE STACK: the try region
+         * covers only the INVOKEVIRTUAL, so a throwing setter wraps as
          * "setter rejected the bound value: &lt;cause&gt;" while binding errors raised while
          * producing the value were never inside the region.
          */
@@ -422,8 +437,6 @@ final class PojoSpecializer {
             // slot write terminates there and must not leak into any later frame
             Object[] entryShape = slots.snapshot();
             mv.visitLabel(tryStart);
-            mv.visitVarInsn(Opcodes.ALOAD, 4);
-            mv.visitInsn(Opcodes.SWAP);
             mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, pojoInternal, setter.getName(), setterDesc,
                     false);
             mv.visitLabel(tryEnd);

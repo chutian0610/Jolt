@@ -17,6 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -148,6 +149,29 @@ class GeneratedBindersTest {
         JoltWriter writer = Jolt.write();
         binder.write(pojo, writer);
         assertEquals("{\"label\":null}", writer.toString());
+    }
+
+    @Test
+    void planCachedReferenceArmExecutesThePlanWithoutOverridesAndNeverFeedsTheFacade()
+            throws Exception {
+        // a PUBLIC target — package-private ones legitimately fall back to reflective
+        Class<?> planCached = GeneratedBinders.planCachedForType(BindFixtures.Customer.class)
+                .getClass();
+        // the reference arm is a plain GenBinderBase subclass: no straight-line overrides
+        assertThrows(NoSuchMethodException.class, () -> planCached.getDeclaredMethod("parse",
+                io.github.chutian0610.jolt.tree.Node.class, String.class, BindConfig.class));
+        // the facade registry holds the specialized binder, never the reference arm
+        assertNotSame(planCached, Bind.generatedLookupForTest(BindFixtures.Customer.class));
+        // but it binds identically (functional sanity)
+        io.github.chutian0610.jolt.bind.fixtures.BindFixtures.Customer parsed =
+                (io.github.chutian0610.jolt.bind.fixtures.BindFixtures.Customer)
+                        GeneratedBinders.planCachedForType(BindFixtures.Customer.class).parse(
+                                Tree.parse(("{\"name\":\"ann\",\"emails\":[\"a@x\"],"
+                                        + "\"tier\":2}").getBytes(StandardCharsets.UTF_8)),
+                                "$", BindConfig.defaults());
+        assertEquals("ann", parsed.name());
+        assertEquals(java.util.List.of("a@x"), parsed.emails());
+        assertEquals(2, parsed.tier());
     }
 
     /** Self-referential record: cascade registration must terminate (T32-review bug pinned). */

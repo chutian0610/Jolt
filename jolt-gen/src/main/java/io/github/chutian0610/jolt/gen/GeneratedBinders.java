@@ -29,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class GeneratedBinders {
 
     private static final Map<Class<?>, TypedBinder<?>> CACHE = new ConcurrentHashMap<>();
+    private static final Map<Class<?>, TypedBinder<?>> PLAN_CACHE = new ConcurrentHashMap<>();
     private static final String GEN_PACKAGE = "io.github.chutian0610.jolt.gen";
 
     private GeneratedBinders() {}
@@ -44,9 +45,33 @@ public final class GeneratedBinders {
             if (cached != null) {
                 return cached;
             }
-            cached = create(type);
+            cached = create(type, true);
             CACHE.put(type, cached);
             io.github.chutian0610.jolt.bind.Bind.registerGenerated(type, cached);
+            return cached;
+        }
+    }
+
+    /**
+     * The M4-era plan-executing binder for {@code type} — a BENCHMARK/REFERENCE arm, not a
+     * supported path: it generates a {@code GenBinderBase} subclass with no straight-line
+     * overrides (the pre-M5 generated binder), cached separately, never registered with the
+     * {@code Bind} facade. Its nested routing resolves through the facade registry like any
+     * other binder, so nested children bind through the (specialized) classes the facade
+     * uses — the arm isolates the plan-executor layer, not the full M4 stack.
+     */
+    public static <T> TypedBinder<T> planCachedForType(Class<T> type) {
+        TypedBinder<T> cached = cast(PLAN_CACHE.get(type));
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (PLAN_CACHE) {
+            cached = cast(PLAN_CACHE.get(type));
+            if (cached != null) {
+                return cached;
+            }
+            cached = create(type, false);
+            PLAN_CACHE.put(type, cached);
             return cached;
         }
     }
@@ -66,21 +91,41 @@ public final class GeneratedBinders {
         return false;
     }
 
-    private static <T> TypedBinder<T> create(Class<T> type) {
+    /** Distinct class names per target: full-name SHA-256 prefix — the legacy
+     * {@code hashCode()} hex collided (two classes of one benchmark fixture shared the same
+     * eight hex digits and silently loaded as one class). The plan-cached reference arm gets
+     * its own namespace so both classes of one type coexist. */
+    private static String generatedClassName(Class<?> type, boolean specialized) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(type.getName().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(16);
+            for (int i = 0; i < 8; i++) {
+                hex.append(String.format("%02x", digest[i]));
+            }
+            return GEN_PACKAGE + ".Gen$" + (specialized ? "" : "Plan$") + hex;
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 unavailable", impossible);
+        }
+    }
+
+    private static <T> TypedBinder<T> create(Class<T> type, boolean specialized) {
         if (!Modifier.isPublic(type.getModifiers())) {
             // Fallback (documented): non-public targets keep the reflective binder.
             return io.github.chutian0610.jolt.bind.Bind.reflectiveBinder(type);
         }
         GenPlan<T> plan = new GenPlan<>(type);
-        String generatedName = GEN_PACKAGE + ".Gen$" + Integer.toHexString(type.getName().hashCode());
+        String generatedName = generatedClassName(type, specialized);
         net.bytebuddy.dynamic.DynamicType.Builder<?> builder = new ByteBuddy()
                 .subclass(GenBinderBase.class)
                 .name(generatedName);
         // M5 specialization: straight-line parse/write overrides replace plan execution
-        if (type.isRecord()) {
-            builder = RecordSpecializer.apply(builder, generatedName, plan);
-        } else {
-            builder = PojoSpecializer.apply(builder, generatedName, plan);
+        if (specialized) {
+            if (type.isRecord()) {
+                builder = RecordSpecializer.apply(builder, generatedName, plan);
+            } else {
+                builder = PojoSpecializer.apply(builder, generatedName, plan);
+            }
         }
         Class<?> rawGenerated = builder
                 .make()
@@ -90,20 +135,28 @@ public final class GeneratedBinders {
         try {
             binder = (GenBinderBase) rawGenerated.getDeclaredConstructor().newInstance();
             binder.assignPlan(plan);
-            if (type.isRecord()) {
-                RecordSpecializer.bakeFields(binder, plan);
-            } else {
-                PojoSpecializer.bakeFields(binder, plan);
+            if (specialized) {
+                if (type.isRecord()) {
+                    RecordSpecializer.bakeFields(binder, plan);
+                } else {
+                    PojoSpecializer.bakeFields(binder, plan);
+                }
             }
-            // register BEFORE cascading: self-referential records terminate via the cache
-            CACHE.put(type, binder);
-            io.github.chutian0610.jolt.bind.Bind.registerGenerated(type, (TypedBinder<T>) binder);
+            // register BEFORE cascading: self-referential records terminate via the cache.
+            // The facade cache/registry belong to the specialized path only — the plan-cached
+            // arm lives in its own map and never feeds the nested routing.
+            if (specialized) {
+                CACHE.put(type, binder);
+                io.github.chutian0610.jolt.bind.Bind.registerGenerated(type, (TypedBinder<T>) binder);
+            }
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("generated binder could not be instantiated", e);
         }
         cascade(plan);
-        // after cascade: child-binder fields resolve via the cache
-        RecordSpecializer.initGeneratedBinder(binder);
+        if (specialized) {
+            // after cascade: child-binder fields resolve via the cache
+            RecordSpecializer.initGeneratedBinder(binder);
+        }
         return (TypedBinder<T>) binder;
     }
 
