@@ -78,6 +78,14 @@ public final class Bind {
         return ReflectiveBinder.forClass(type);
     }
 
+    /**
+     * A reflective {@link TypedBinder} for {@code type} — the public entry point other modules
+     * (jolt-gen's fallback, embedders) use to obtain the default adapter.
+     */
+    public static <T> TypedBinder<T> reflectiveBinder(Class<T> type) {
+        return ReflectiveBinder.forClass(type);
+    }
+
     // Generated binders registered by jolt-gen (M4): consulted BEFORE the reflective cache so
     // nested record/POJO values route to generated code when present. Registration is the
     // forward direction — jolt-bind never depends on jolt-gen (ADR-0004).
@@ -98,10 +106,6 @@ public final class Bind {
         return GENERATED.get(type);
     }
 
-    /** A reflective {@link TypedBinder} for {@code type} — the public fallback entry point. */
-    public static <T> TypedBinder<T> reflectiveBinder(Class<T> type) {
-        return ReflectiveBinder.forClass(type);
-    }
 
     // --- record/POJO → value (parse direction) ---
 

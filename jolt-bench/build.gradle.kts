@@ -4,6 +4,9 @@ plugins {
 
 dependencies {
     implementation(project(":jolt-core"))
+    implementation(project(":jolt-tree"))
+    implementation(project(":jolt-bind"))
+    implementation(project(":jolt-gen"))
 
     // T8 competitors: Jackson with the afterburner module (the M1 bar), dsl-json (stretch).
     jmh("com.fasterxml.jackson.core:jackson-databind:2.18.2")

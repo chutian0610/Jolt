@@ -2,6 +2,7 @@ dependencies {
     implementation(project(":jolt-core"))
     implementation(project(":jolt-tree"))
     implementation(project(":jolt-bind"))
+    implementation(project(":jolt-gen"))
     testImplementation(testFixtures(project(":jolt-bind")))
 
     testImplementation(platform("org.junit:junit-bom:5.11.4"))
