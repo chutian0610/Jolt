@@ -72,9 +72,15 @@ public final class GeneratedBinders {
             return io.github.chutian0610.jolt.bind.Bind.reflectiveBinder(type);
         }
         GenPlan<T> plan = new GenPlan<>(type);
-        Class<?> rawGenerated = new ByteBuddy()
+        String generatedName = GEN_PACKAGE + ".Gen$" + Integer.toHexString(type.getName().hashCode());
+        net.bytebuddy.dynamic.DynamicType.Builder<?> builder = new ByteBuddy()
                 .subclass(GenBinderBase.class)
-                .name(GEN_PACKAGE + ".Gen$" + Integer.toHexString(type.getName().hashCode()))
+                .name(generatedName);
+        if (type.isRecord()) {
+            // M5 specialization: straight-line parse/write overrides replace plan execution
+            builder = RecordSpecializer.apply(builder, generatedName, plan);
+        }
+        Class<?> rawGenerated = builder
                 .make()
                 .load(GeneratedBinders.class.getClassLoader())
                 .getLoaded();
@@ -82,6 +88,9 @@ public final class GeneratedBinders {
         try {
             binder = (GenBinderBase) rawGenerated.getDeclaredConstructor().newInstance();
             binder.assignPlan(plan);
+            if (type.isRecord()) {
+                RecordSpecializer.bakeFields(binder, plan);
+            }
             // register BEFORE cascading: self-referential records terminate via the cache
             CACHE.put(type, binder);
             io.github.chutian0610.jolt.bind.Bind.registerGenerated(type, (TypedBinder<T>) binder);
@@ -89,6 +98,10 @@ public final class GeneratedBinders {
             throw new IllegalStateException("generated binder could not be instantiated", e);
         }
         cascade(plan);
+        if (type.isRecord()) {
+            // after cascade: child-binder fields resolve via the cache
+            RecordSpecializer.initGeneratedBinder(binder);
+        }
         return (TypedBinder<T>) binder;
     }
 
@@ -118,7 +131,7 @@ public final class GeneratedBinders {
         // GenericArrayType (X[][]) falls through: component bindability resolves on the inner level
     }
 
-    private static boolean isBindable(Class<?> raw) {
+    static boolean isBindable(Class<?> raw) {
         // enums are leaf scalars bound by name — no binder generated for them
         return raw != null && !raw.isArray() && raw != Object.class && !raw.isEnum()
                 && !raw.getName().startsWith("java.")

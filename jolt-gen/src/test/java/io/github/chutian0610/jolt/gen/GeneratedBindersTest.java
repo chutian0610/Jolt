@@ -13,9 +13,11 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The generated-binding contract: fixture parity, cache identity, fallback, nested routing. */
@@ -85,6 +87,21 @@ class GeneratedBindersTest {
     }
 
     record Point(int x, int y) {}
+
+    @Test
+    void recordTargetsGetStraightLineOverrides() throws Exception {
+        Class<?> generated = GeneratedBinders.forType(BindFixtures.Order.class).getClass();
+        // the overrides live ON the generated class — inherited plan execution fails this gate
+        assertNotNull(generated.getDeclaredMethod("parse",
+                io.github.chutian0610.jolt.tree.Node.class, String.class, BindConfig.class));
+        assertNotNull(generated.getDeclaredMethod("write", Object.class, JoltWriter.class));
+        assertNotNull(generated.getDeclaredMethod("writeFields",
+                Object.class, JoltWriter.class, String.class));
+        // POJO targets keep the M4 plan-executing binder: no parse override of their own
+        Class<?> pojoGenerated = GeneratedBinders.forType(BindFixtures.LabelPojo.class).getClass();
+        assertThrows(NoSuchMethodException.class, () -> pojoGenerated.getDeclaredMethod("parse",
+                io.github.chutian0610.jolt.tree.Node.class, String.class, BindConfig.class));
+    }
 
     /** Self-referential record: cascade registration must terminate (T32-review bug pinned). */
     record Linked(String name, Linked next) {}

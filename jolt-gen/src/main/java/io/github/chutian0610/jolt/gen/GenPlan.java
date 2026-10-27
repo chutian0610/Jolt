@@ -24,6 +24,14 @@ public final class GenPlan<T> {
     final Method[] accessors; // write side: component accessors (records); getters (POJOs)
     final List<Method> setters;    // POJO parse side: setters sorted by name
 
+    /**
+     * Records only: the canonical constructor pre-resolved to a {@code MethodHandle} spread
+     * over the bound-arguments array — the specialized parse body invokes construction through
+     * it (no newInstance accessibility walk per call). The fallback plan executor keeps using
+     * the {@link #constructor} directly; the handle is an addition, not a replacement.
+     */
+    final java.lang.invoke.MethodHandle constructorHandle;
+
     @SuppressWarnings("unchecked")
     GenPlan(Class<T> type) {
         this.type = type;
@@ -46,11 +54,20 @@ public final class GenPlan<T> {
             } catch (NoSuchMethodException e) {
                 throw new IllegalArgumentException("record without canonical constructor: " + type.getName(), e);
             }
+            try {
+                this.constructorHandle = java.lang.invoke.MethodHandles.lookup()
+                        .unreflectConstructor(this.constructor)
+                        .asSpreader(Object[].class, argTypes.length);
+            } catch (IllegalAccessException e) {
+                throw new IllegalArgumentException("cannot pre-resolve canonical constructor: "
+                        + type.getName(), e);
+            }
             this.nameSet = java.util.Set.of(names);
             this.setters = List.of();
             return;
         }
         this.isRecord = false;
+        this.constructorHandle = null;
         this.accessors = getters(type);
         this.names = setterNames(type);
         this.nameSet = java.util.Set.of(this.names);
