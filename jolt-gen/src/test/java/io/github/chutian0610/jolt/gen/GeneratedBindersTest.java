@@ -89,18 +89,65 @@ class GeneratedBindersTest {
     record Point(int x, int y) {}
 
     @Test
-    void recordTargetsGetStraightLineOverrides() throws Exception {
-        Class<?> generated = GeneratedBinders.forType(BindFixtures.Order.class).getClass();
-        // the overrides live ON the generated class — inherited plan execution fails this gate
-        assertNotNull(generated.getDeclaredMethod("parse",
-                io.github.chutian0610.jolt.tree.Node.class, String.class, BindConfig.class));
-        assertNotNull(generated.getDeclaredMethod("write", Object.class, JoltWriter.class));
-        assertNotNull(generated.getDeclaredMethod("writeFields",
-                Object.class, JoltWriter.class, String.class));
-        // POJO targets keep the M4 plan-executing binder: no parse override of their own
-        Class<?> pojoGenerated = GeneratedBinders.forType(BindFixtures.LabelPojo.class).getClass();
-        assertThrows(NoSuchMethodException.class, () -> pojoGenerated.getDeclaredMethod("parse",
-                io.github.chutian0610.jolt.tree.Node.class, String.class, BindConfig.class));
+    void specializedTargetsGetStraightLineOverrides() throws Exception {
+        // record AND POJO targets: the overrides live ON the generated class — inherited plan
+        // execution fails this gate
+        for (Class<?> target : new Class<?>[]{BindFixtures.Order.class, BindFixtures.LabelPojo.class}) {
+            Class<?> generated = GeneratedBinders.forType(target).getClass();
+            assertNotNull(generated.getDeclaredMethod("parse",
+                    io.github.chutian0610.jolt.tree.Node.class, String.class, BindConfig.class),
+                    target.getName());
+            assertNotNull(generated.getDeclaredMethod("write", Object.class, JoltWriter.class),
+                    target.getName());
+            assertNotNull(generated.getDeclaredMethod("writeFields",
+                    Object.class, JoltWriter.class, String.class), target.getName());
+        }
+    }
+
+    @Test
+    void pojoFixtureBindsAndWritesByteIdenticallyThroughTheSpecializedBinder() {
+        TypedBinder<BindFixtures.LabelPojo> binder =
+                GeneratedBinders.forType(BindFixtures.LabelPojo.class);
+        BindFixtures.LabelPojo pojo = binder.parse(
+                Tree.parse("{\"label\":\"a\\\"b\"}".getBytes(StandardCharsets.UTF_8)), "$",
+                BindConfig.defaults());
+        assertEquals("a\"b", pojo.getLabel());
+        JoltWriter writer = Jolt.write();
+        binder.write(pojo, writer);
+        assertEquals("{\"label\":\"a\\\"b\"}", writer.toString());
+    }
+
+    @Test
+    void pojoFailOnUnknownIsAnOOneContainsWithTheUnknownKeysPath() {
+        TypedBinder<BindFixtures.LabelPojo> binder =
+                GeneratedBinders.forType(BindFixtures.LabelPojo.class);
+        // unknown fields ignored by default
+        BindFixtures.LabelPojo ignored = binder.parse(
+                Tree.parse("{\"label\":\"v\",\"sneaky\":1}".getBytes(StandardCharsets.UTF_8)),
+                "$", BindConfig.defaults());
+        assertEquals("v", ignored.getLabel());
+        // fail-on-unknown raises at the unknown key's own path
+        io.github.chutian0610.jolt.bind.JsonBindException e =
+                assertThrows(io.github.chutian0610.jolt.bind.JsonBindException.class,
+                        () -> binder.parse(
+                                Tree.parse("{\"label\":\"v\",\"sneaky\":1}".getBytes(StandardCharsets.UTF_8)),
+                                "$", BindConfig.defaults().withFailOnUnknown()));
+        assertEquals("$.sneaky", e.getPath());
+    }
+
+    @Test
+    void pojoJsonNullBindsNullIntoTheReferenceSetter() {
+        TypedBinder<BindFixtures.LabelPojo> binder =
+                GeneratedBinders.forType(BindFixtures.LabelPojo.class);
+        // JSON null (explicit in the document) binds as Java null — the reflective path
+        // invokes the setter with null; write mirrors it back as JSON null
+        BindFixtures.LabelPojo pojo = binder.parse(
+                Tree.parse("{\"label\":null}".getBytes(StandardCharsets.UTF_8)), "$",
+                BindConfig.defaults());
+        assertNull(pojo.getLabel());
+        JoltWriter writer = Jolt.write();
+        binder.write(pojo, writer);
+        assertEquals("{\"label\":null}", writer.toString());
     }
 
     /** Self-referential record: cascade registration must terminate (T32-review bug pinned). */
