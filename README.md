@@ -107,6 +107,28 @@ Order strict = Bind.parse(jsonBytes, Order.class,
 while missing/null primitives throw; abstract targets are rejected (polymorphism is a future
 feature). Binding has no performance bars (same note as the tree layer).
 
+### Generated binders (jolt-gen)
+
+An optional module that runtime-generates a dedicated binder class per target type via
+ByteBuddy, with per-type plans cached for the JVM's life. Non-public targets fall back to the
+reflective binder.
+
+```java
+import io.github.chutian0610.jolt.gen.GeneratedBinders;
+import io.github.chutian0610.jolt.bind.TypedBinder;
+
+TypedBinder<Order> binder = GeneratedBinders.forType(Order.class);
+Order order = binder.parse(node, "$", BindConfig.defaults());
+binder.write(order, writer);
+```
+
+**Performance honesty:** the relative bar (generated ≥ 2× reflective) is NOT met by the
+current implementation — generated ≈ 0.92× parse / 0.94× write, within noise of parity. The
+generated class carries no bytecode-level specialization; the plan-cached execution is the
+same work as the reflective path. The ≥2× claim requires true bytecode specialization
+(inlined accessor/constructor calls), recorded as the escalation path (see
+[docs](docs/adr/0006-platform-java21-hotspot-first.md) for the platform stance).
+
 ## Performance
 
 The M1 bars, measured on the final M1 code (commit `31f06c2`-lineage, verified at gate review):
