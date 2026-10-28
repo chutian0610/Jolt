@@ -36,7 +36,8 @@ public final class Bind {
 
     /** Loads a UTF-8 JSON document under an explicit binding configuration. */
     public static <T> T parse(byte[] json, Class<T> type, BindConfig config) {
-        if (config.direct()) {
+        if (config.direct() && java.lang.reflect.Modifier.isPublic(type.getModifiers())) {
+            // non-public targets keep the M4 fallback contract: the reflective (tree) binder
             return DirectBinder.forClass(type).parseDirect(json, config);
         }
         return fromNode(Tree.parse(json), type, config, "$");
@@ -49,7 +50,7 @@ public final class Bind {
 
     /** Loads a String document under an explicit binding configuration (the UTF-16 engine). */
     public static <T> T parse(String json, Class<T> type, BindConfig config) {
-        if (config.direct()) {
+        if (config.direct() && java.lang.reflect.Modifier.isPublic(type.getModifiers())) {
             return DirectBinder.forClass(type).parseDirect(json, config);
         }
         return fromNode(Tree.parse(json), type, config, "$");
