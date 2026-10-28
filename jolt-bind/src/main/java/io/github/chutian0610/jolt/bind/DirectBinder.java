@@ -29,7 +29,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
     private static final Map<Class<?>, DirectBinder<?>> CACHE = new ConcurrentHashMap<>();
 
-    // component kinds (strict scalars; the M3 spectrum widens in later tickets)
+    // component kinds: strict scalars, exact decimals, enums, and nested records
     private static final int K_STRING = 0;
     private static final int K_BOOLEAN = 1;
     private static final int K_BYTE = 2;
@@ -38,9 +38,16 @@ final class DirectBinder<T> implements TypedBinder<T> {
     private static final int K_LONG = 5;
     private static final int K_FLOAT = 6;
     private static final int K_DOUBLE = 7;
+    private static final int K_BIG_DECIMAL = 8;
+    private static final int K_BIG_INTEGER = 9;
+    private static final int K_ENUM = 10;
+    private static final int K_RECORD = 11;
 
     private final Class<T> type;
     private final String[] names;
+    private final String[] simpleNames;   // the component type's getSimpleName() — the tree
+    // path builds bound/missing messages from it (boxed "Integer" vs primitive "int")
+    private final Class<?>[] componentTypes;
     private final int[] kinds;
     private final boolean[] primitives;
     private final Constructor<T> constructor;
@@ -50,19 +57,21 @@ final class DirectBinder<T> implements TypedBinder<T> {
     private DirectBinder(Class<?> type) {
         if (!type.isRecord()) {
             throw new UnsupportedOperationException(
-                    "direct binding covers records first; " + type.getName()
-                            + " lands with the M6 spectrum tickets");
+                    "direct binding covers records; POJOs land with the M6-T3 ticket");
         }
         this.type = (Class<T>) type;
         RecordComponent[] components = type.getRecordComponents();
         this.names = new String[components.length];
+        this.simpleNames = new String[components.length];
+        this.componentTypes = new Class<?>[components.length];
         this.kinds = new int[components.length];
         this.primitives = new boolean[components.length];
-        Class<?>[] argTypes = new Class<?>[components.length];
+        Class<?>[] argTypes = this.componentTypes;
         for (int i = 0; i < components.length; i++) {
             names[i] = components[i].getName();
             Class<?> raw = components[i].getType();
             argTypes[i] = raw;
+            simpleNames[i] = raw.getSimpleName();
             primitives[i] = raw.isPrimitive();
             kinds[i] = kindOf(raw);
         }
@@ -116,8 +125,20 @@ final class DirectBinder<T> implements TypedBinder<T> {
         if (raw == double.class || raw == Double.class) {
             return K_DOUBLE;
         }
+        if (raw == java.math.BigDecimal.class) {
+            return K_BIG_DECIMAL;
+        }
+        if (raw == java.math.BigInteger.class) {
+            return K_BIG_INTEGER;
+        }
+        if (raw.isEnum()) {
+            return K_ENUM;
+        }
+        if (raw.isRecord()) {
+            return K_RECORD;
+        }
         throw new UnsupportedOperationException(
-                "component type " + raw.getName() + " lands with the M6 spectrum tickets");
+                "component type " + raw.getName() + " lands with the M6-T3 ticket");
     }
 
     /** The tree seam is not supported by the direct adapter — tokens in, values out. */
@@ -140,7 +161,18 @@ final class DirectBinder<T> implements TypedBinder<T> {
     public T parseTokens(JoltParser parser, BindConfig config) {
         BindPath path = state.get().path;
         path.reset();
-        return readRecord(parser, config, path);
+        Token first = parser.nextToken();
+        if (first != Token.START_OBJECT) {
+            // a non-object document: the tree path reads every component as missing
+            // (get(name) is null on a scalar node) — the first primitive component throws
+            throwFirstMissingPrimitive(path);
+        }
+        T value = readRecordBody(parser, config, path, first);
+        // drain the tail exactly like the tree loader: parser syntax errors surface unchanged
+        while (parser.nextToken() != Token.EOF) {
+            // trailing content
+        }
+        return value;
     }
 
     /** Facade convenience: reuses the thread's parser (steady-state allocation = target graph). */
@@ -155,9 +187,14 @@ final class DirectBinder<T> implements TypedBinder<T> {
         return parseTokens(st.parserFor(json), config);
     }
 
-    private T readRecord(JoltParser p, BindConfig config, BindPath path) {
+    /** The object body: consumes from AFTER the caller-read START_OBJECT through
+     * END_OBJECT, runs the declaration-order error sweep, and constructs. Nested records
+     * recurse into the SAME token stream (no drain) — the tree path's child-toValue
+     * recursion lands here as nested-body consumption. */
+    T readRecordBody(JoltParser p, BindConfig config, BindPath path, Token first) {
         Object[] args = new Object[names.length]; // null = missing (reference nulls and
         // missing components are indistinguishable by design — both bind as null)
+        Token t = first;
         // The tree path raises errors in COMPONENT-DECLARATION order (it loops the component
         // table); the token stream arrives in DOCUMENT order. Errors therefore land in
         // lazily-allocated slots (the failure path may allocate — ADR-0005) and the
@@ -165,12 +202,6 @@ final class DirectBinder<T> implements TypedBinder<T> {
         // runs after that, exactly like the tree path's keys scan.
         Object[] errors = null;
         String unknownKey = null;
-        Token t = p.nextToken();
-        if (t != Token.START_OBJECT) {
-            // a non-object document: the tree path reads every component as missing
-            // (get(name) is null on a scalar node) — the first primitive component throws
-            throwFirstMissingPrimitive(path);
-        }
         while ((t = p.nextToken()) != Token.END_OBJECT) {
             // syntax errors (unterminated containers, junk) surface from nextToken unchanged
             // t == FIELD_NAME — match by name against the component table, zero allocation
@@ -194,7 +225,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
             }
             path.pushName(names[comp]);
             try {
-                args[comp] = readScalar(p, comp, path);
+                args[comp] = readScalar(p, comp, config, path);
             } catch (JsonBindException e) {
                 // the error is recorded in the component's slot; a container value has
                 // already been skipped by the throw site, scalar tokens were consumed by
@@ -221,10 +252,6 @@ final class DirectBinder<T> implements TypedBinder<T> {
             throw new JsonBindException("unknown field '" + unknownKey + "'",
                     path.resolve() + "." + unknownKey);
         }
-        // drain the tail exactly like the tree loader: parser syntax errors surface unchanged
-        while ((t = p.nextToken()) != Token.EOF) {
-            // trailing content
-        }
         try {
             return constructor.newInstance(args);
         } catch (InvocationTargetException e) {
@@ -237,14 +264,14 @@ final class DirectBinder<T> implements TypedBinder<T> {
         }
     }
 
-    /** {@code comp} indexes the component table (primitives[]); the kind drives the read. */
-    private Object readScalar(JoltParser p, int comp, BindPath path) {
+    /** {@code comp} indexes the component table (primitives[]/simpleNames[]); the kind drives the read. */
+    private Object readScalar(JoltParser p, int comp, BindConfig config, BindPath path) {
         int kind = kinds[comp];
         Token t = p.nextToken();
         if (t == Token.VALUE_NULL) {
             if (primitives[comp]) {
                 throw new JsonBindException("JSON null for primitive component "
-                        + kindSimpleName(kind), path.resolve());
+                        + simpleNames[comp], path.resolve());
             }
             return null;
         }
@@ -267,7 +294,8 @@ final class DirectBinder<T> implements TypedBinder<T> {
             case K_INT -> {
                 long v = readLong(p, t, path);
                 if (v > Integer.MAX_VALUE || v < Integer.MIN_VALUE) {
-                    throw new JsonBindException("number does not fit in int", path.resolve());
+                    throw new JsonBindException("number does not fit in "
+                            + simpleNames[comp], path.resolve());
                 }
                 return Integer.valueOf((int) v);
             }
@@ -277,14 +305,16 @@ final class DirectBinder<T> implements TypedBinder<T> {
             case K_BYTE -> {
                 long v = readLong(p, t, path);
                 if (v > Byte.MAX_VALUE || v < Byte.MIN_VALUE) {
-                    throw new JsonBindException("number does not fit in byte", path.resolve());
+                    throw new JsonBindException("number does not fit in "
+                            + simpleNames[comp], path.resolve());
                 }
                 return Byte.valueOf((byte) v);
             }
             case K_SHORT -> {
                 long v = readLong(p, t, path);
                 if (v > Short.MAX_VALUE || v < Short.MIN_VALUE) {
-                    throw new JsonBindException("number does not fit in short", path.resolve());
+                    throw new JsonBindException("number does not fit in "
+                            + simpleNames[comp], path.resolve());
                 }
                 return Short.valueOf((short) v);
             }
@@ -300,7 +330,45 @@ final class DirectBinder<T> implements TypedBinder<T> {
                 }
                 return Double.valueOf(p.bigDecimalValue().doubleValue());
             }
+            case K_BIG_DECIMAL -> {
+                requireNumber(p, t, path);
+                return p.bigDecimalValue();
+            }
+            case K_BIG_INTEGER -> {
+                requireNumber(p, t, path);
+                try {
+                    return p.bigDecimalValue().toBigIntegerExact();
+                } catch (ArithmeticException lossy) {
+                    throw new JsonBindException("number is not a whole number", path.resolve());
+                }
+            }
+            case K_ENUM -> {
+                if (t != Token.VALUE_STRING) {
+                    throw tagError(p, t, "a string", path);
+                }
+                String text = p.textValue();
+                Class<?> raw = componentTypes[comp];
+                try {
+                    return Enum.valueOf((Class<? extends Enum>) raw, text);
+                } catch (IllegalArgumentException unknownName) {
+                    throw new JsonBindException("unknown enum name '" + text
+                            + "' for " + raw.getSimpleName(), path.resolve());
+                }
+            }
+            case K_RECORD -> {
+                // the child's OWN binder carries the child's component table — recursion
+                // happens at runtime through the cache (self-referential records converge;
+                // construction itself never recurses)
+                return DirectBinder.forClass(componentTypes[comp])
+                        .readRecordBody(p, config, path, t);
+            }
             default -> throw new IllegalStateException("unreachable kind " + kind);
+        }
+    }
+
+    private void requireNumber(JoltParser p, Token t, BindPath path) {
+        if (t != Token.VALUE_NUMBER_INT && t != Token.VALUE_NUMBER_FLOAT) {
+            throw tagError(p, t, "a number", path);
         }
     }
 
