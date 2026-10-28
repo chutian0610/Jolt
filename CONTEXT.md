@@ -37,7 +37,19 @@ The node discriminator enum: `OBJECT`, `ARRAY`, `STRING`, `NUMBER`, `BOOLEAN`, `
 _Avoid_: MissingNode.
 
 **Bind**:
-The binding facade: `Bind.parse(json, Type)` constructs records/POJOs from JSON; `Bind.write(value)` serializes them back. JSON names are component/property names verbatim — no annotations, no naming strategies in M3.
+The binding facade: `Bind.parse(json, Type)` constructs records/POJOs from JSON; `Bind.write(value)` serializes them back. JSON names are component/property names verbatim — no annotations, no naming strategies.
+The tree path is the default read path; see Direct bind for the skip-the-tree alternative.
+
+**Direct bind**:
+The direct read path: parser tokens feed the binder straight to constructed target types,
+skipping the tree layer. Semantically equivalent to the tree path — same values, same error
+matrix, same `$` paths; a divergence between the two read paths is a gate failure, not a
+footnote. Selected explicitly by the caller (the tree path stays the default); steady-state
+allocation is the target object graph only (boxing included — the values themselves), with
+error paths assembled lazily on failure. The write direction has been streaming since M4;
+"direct" names what the read side skips.
+_Avoid_: streaming parse (the write side streams too — "direct" names the skipped tree),
+fast binding.
 
 **JsonBindException**:
 The binding failure: a runtime exception carrying the JSON path (`$.user.tags[2]`), distinct from `JsonParseException` — parse errors are syntax, bind errors are data mapping. Two layers, two exceptions.
