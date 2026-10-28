@@ -36,6 +36,9 @@ public final class Bind {
 
     /** Loads a UTF-8 JSON document under an explicit binding configuration. */
     public static <T> T parse(byte[] json, Class<T> type, BindConfig config) {
+        if (config.direct()) {
+            return DirectBinder.forClass(type).parseDirect(json, config);
+        }
         return fromNode(Tree.parse(json), type, config, "$");
     }
 
@@ -44,8 +47,11 @@ public final class Bind {
         return parse(json, type, BindConfig.defaults());
     }
 
-    /** Loads a String document under an explicit binding configuration. */
+    /** Loads a String document under an explicit binding configuration (the UTF-16 engine). */
     public static <T> T parse(String json, Class<T> type, BindConfig config) {
+        if (config.direct()) {
+            return DirectBinder.forClass(type).parseDirect(json, config);
+        }
         return fromNode(Tree.parse(json), type, config, "$");
     }
 

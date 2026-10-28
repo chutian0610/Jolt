@@ -58,4 +58,14 @@ public interface JoltParser {
 
     /** The most recent number as an exact {@link BigDecimal}. */
     BigDecimal bigDecimalValue();
+
+    /**
+     * Zero-allocation comparison of the most recent {@link Token#FIELD_NAME} token's decoded
+     * text with {@code expected}. Field-name sets are fixed per binding target in steady
+     * state, so repeated comparisons hit a per-parser cache and allocate nothing (the first
+     * comparison with a new name may allocate its encoded form). Non-{@code FIELD_NAME}
+     * state returns false. Escaped field names (rare) fall back to the decoded comparison,
+     * which allocates — the never-taken fast/slow contract.
+     */
+    boolean fieldNameEquals(String expected);
 }

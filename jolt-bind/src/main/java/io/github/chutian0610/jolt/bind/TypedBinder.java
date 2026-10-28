@@ -1,5 +1,6 @@
 package io.github.chutian0610.jolt.bind;
 
+import io.github.chutian0610.jolt.JoltParser;
 import io.github.chutian0610.jolt.JoltWriter;
 import io.github.chutian0610.jolt.tree.Node;
 
@@ -25,4 +26,16 @@ public interface TypedBinder<T> {
      * {@code Bind.writeTo} so both adapters share the escaping and verbatim-number semantics.
      */
     void write(T value, JoltWriter writer);
+
+    /**
+     * The direct read form: parser tokens feed the binder straight to the constructed
+     * target, skipping the tree layer. Semantically equivalent to {@link #parse} — same
+     * values, same error matrix, same `$` paths (a divergence between the two read forms is
+     * a gate failure). The tree-path adapters may not support it (the default throws); the
+     * direct implementation — and any future generated direct binder — implements it.
+     */
+    default T parseTokens(JoltParser parser, BindConfig config) {
+        throw new UnsupportedOperationException(
+                getClass().getName() + " does not support direct (token) parsing");
+    }
 }

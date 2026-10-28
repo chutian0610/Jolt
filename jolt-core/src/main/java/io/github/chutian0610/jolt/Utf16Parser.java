@@ -396,6 +396,31 @@ public final class Utf16Parser implements JoltParser {
     }
 
     /**
+     * Zero-allocation field-name comparison (the class javadoc on the interface governs).
+     * Clean spans compare the token's chars directly against the expected name; escaped
+     * spans fall back to the decoded comparison. The char comparison needs no cache.
+     */
+    @Override
+    public boolean fieldNameEquals(String expected) {
+        if (lastToken != Token.FIELD_NAME) {
+            return false;
+        }
+        if (!stringHasEscape) {
+            int len = valueEnd - valueStart;
+            if (len != expected.length()) {
+                return false;
+            }
+            for (int i = 0; i < len; i++) {
+                if (json[valueStart + i] != expected.charAt(i)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return expected.equals(textValue());
+    }
+
+    /**
      * The most recent number under the number-promotion policy (ADR-0002): integers within long
      * range as {@link Long}, integers that overflow as {@link BigDecimal}; floats up to 17
      * significant digits and within double range as {@link Double}, precision-hungry or

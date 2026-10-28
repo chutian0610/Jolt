@@ -129,4 +129,24 @@ class JoltParityTest {
         // A well-formed pair passes.
         assertDoesNotThrow(() -> drain(Jolt.parse(new String(new char[]{'"', 0xD83D, 0xDE00, '"'}))));
     }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("engines")
+    void fieldNameEqualsComparesAcrossEngines(String engine, BiFunction<String, Integer, JoltParser> parse) {
+        JoltParser parser = parse.apply("{\"name\":\"v\",\"\\u0071uantity\":2}", 512);
+        assertEquals(Token.START_OBJECT, parser.nextToken());
+        assertEquals(Token.FIELD_NAME, parser.nextToken());
+        assertTrue(parser.fieldNameEquals("name"));
+        assertEquals(false, parser.fieldNameEquals("name "));
+        assertEquals(false, parser.fieldNameEquals("nam"));
+        assertEquals(Token.VALUE_STRING, parser.nextToken());
+        assertEquals(Token.FIELD_NAME, parser.nextToken());
+        // the escaped form decodes to "quantity" — the rare fallback path of the comparison
+        assertTrue(parser.fieldNameEquals("quantity"));
+        assertEquals(false, parser.fieldNameEquals("quantity "));
+        // non-FIELD_NAME state reports false rather than lying
+        assertEquals(Token.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(false, parser.fieldNameEquals("2"));
+        drain(parser);
+    }
 }
