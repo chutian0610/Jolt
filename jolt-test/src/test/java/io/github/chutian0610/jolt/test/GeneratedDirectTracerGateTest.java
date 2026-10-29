@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -141,16 +142,33 @@ class GeneratedDirectTracerGateTest {
     }
 
     @Test
-    void nonCapableShapesKeepTheReflectiveDirectArmOnTheFacade() {
-        // Order (nested record, list, map, enum) hits the registry but declares no direct
-        // read — the facade falls back to the reflective direct binder, values unchanged
-        assertFalse(declaresDirectRead(BindFixtures.Order.class));
+    void orderGraphRidesTheGeneratedDirectArmByteIdentically() {
+        // the T3 flagship: the FULL M3 graph (nested record, list of records, map, enum,
+        // boxed null, exact decimals) binds through the generated direct read — the write
+        // is byte-identical to the canonical document
+        assertTrue(declaresDirectRead(BindFixtures.Order.class));
         BindFixtures.Order tree = Bind.parse(utf8(BindFixtures.ORDER_JSON),
                 BindFixtures.Order.class, BindConfig.defaults());
         BindFixtures.Order direct = Bind.parse(utf8(BindFixtures.ORDER_JSON),
                 BindFixtures.Order.class, BindConfig.defaults().withDirect());
         assertEquals(tree, direct);
         assertEquals(BindFixtures.ORDER_JSON, Bind.write(direct));
+    }
+
+    @Test
+    void pojoRidesTheGeneratedDirectArm() {
+        // the POJO spectrum on the generated arm: values, the default-instance scalar
+        // root, and the setter-rejection cell
+        assertTrue(declaresDirectRead(BindFixtures.LabelPojo.class));
+        BindFixtures.LabelPojo tree = Bind.parse(utf8("{\"label\":\"a\"}"),
+                BindFixtures.LabelPojo.class, BindConfig.defaults());
+        BindFixtures.LabelPojo direct = Bind.parse(utf8("{\"label\":\"a\"}"),
+                BindFixtures.LabelPojo.class, BindConfig.defaults().withDirect());
+        assertEquals("a", direct.getLabel());
+        assertEquals(Bind.write(tree), Bind.write(direct));
+        BindFixtures.LabelPojo scalarRoot = Bind.parse(utf8("5"),
+                BindFixtures.LabelPojo.class, BindConfig.defaults().withDirect());
+        assertNull(scalarRoot.getLabel()); // the default instance
     }
 
     @Test

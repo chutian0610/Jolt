@@ -35,6 +35,19 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
     private static final Map<Class<?>, DirectBinder<?>> CACHE = new ConcurrentHashMap<>();
 
+    /**
+     * The element-type plan cache for the generated arm's delegated element reads: the
+     * parent bakes the element Type as a constant, and resolving it
+     * ({@code getActualTypeArguments} and friends) would allocate per element — one Plan
+     * per Type, JVM-lifetime.
+     */
+    private static final Map<java.lang.reflect.Type, Plan> ELEMENT_PLANS =
+            new ConcurrentHashMap<>();
+
+    static Plan planFor(java.lang.reflect.Type target) {
+        return ELEMENT_PLANS.computeIfAbsent(target, DirectBinder::planOf);
+    }
+
     private enum Shape { RECORD, POJO }
 
     private static final Plan NATURAL_PLAN = new Plan.PNatural();
@@ -279,8 +292,15 @@ final class DirectBinder<T> implements TypedBinder<T> {
         try {
             return constructor.newInstance();
         } catch (ReflectiveOperationException e) {
-            throw new JsonBindException("cannot instantiate " + type.getName(), path.resolve());
+            throw DirectSupport.cannotInstantiate(type.getName(), path);
         }
+    }
+
+    /** The nested dispatch for the generated arm's door: the record or POJO body read. */
+    Object readBody(JoltParser p, BindConfig config, BindPath path, Token first) {
+        return shape == Shape.RECORD
+                ? readRecordBody(p, config, path, first)
+                : readPojoBody(p, config, path, first);
     }
 
     // --- record body ---
@@ -345,7 +365,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
         try {
             instance = constructor.newInstance();
         } catch (ReflectiveOperationException e) {
-            throw new JsonBindException("cannot instantiate " + type.getName(), path.resolve());
+            throw DirectSupport.cannotInstantiate(type.getName(), path);
         }
         // the setter table declares the error priority; the token stream arrives in document
         // order — the same lazy-slot reshaping the record body uses
@@ -370,36 +390,21 @@ final class DirectBinder<T> implements TypedBinder<T> {
                 Object bound = readValue(p, valueToken, plans[comp], config, path);
                 setters[comp].invoke(instance, bound);
             } catch (InvocationTargetException rejected) {
-                if (errors == null) {
-                    errors = new Object[names.length];
-                }
-                errors[comp] = new JsonBindException("setter rejected the bound value: "
-                        + rejected.getCause(), path.resolve());
+                errors = DirectSupport.noteError(errors, comp,
+                        DirectSupport.setterRejected(rejected.getCause(), path), names.length);
             } catch (JsonBindException e) {
-                if (errors == null) {
-                    errors = new Object[names.length];
-                }
-                errors[comp] = e;
+                errors = DirectSupport.noteError(errors, comp, e, names.length);
             } catch (ReflectiveOperationException inaccessible) {
-                if (errors == null) {
-                    errors = new Object[names.length];
-                }
-                errors[comp] = new JsonBindException("cannot invoke setter for " + names[comp],
-                        path.resolve());
+                errors = DirectSupport.noteError(errors, comp,
+                        new JsonBindException("cannot invoke setter for " + names[comp],
+                                path.resolve()), names.length);
             }
             path.pop();
         }
-        // declaration-order sweep (missing does not exist for POJOs — absent properties
-        // stay default), then the unknown-field scan
-        for (int i = 0; i < names.length; i++) {
-            if (errors != null && errors[i] instanceof JsonBindException e) {
-                throw e;
-            }
-        }
-        if (unknownKey != null) {
-            throw new JsonBindException("unknown field '" + unknownKey + "'",
-                    path.resolve() + "." + unknownKey);
-        }
+        // the shared declaration-order sweep (missing does not exist for POJOs — absent
+        // properties stay default), then the unknown-field scan — the SAME call the
+        // generated read makes
+        DirectSupport.sweepPojoErrors(errors, unknownKey, path);
         return instance;
     }
 
@@ -409,7 +414,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
     /** {@code first} is the ALREADY-CONSUMED value token — every reader in the direct
      * path follows the "who read the token passes it down" contract, so nested reads
      * never double-consume. {@code plan} carries the construction-resolved type shape. */
-    private Object readValue(JoltParser p, Token first, Plan plan,
+    static Object readValue(JoltParser p, Token first, Plan plan,
                              BindConfig config, BindPath path) {
         Token t = first;
         if (t == Token.VALUE_NULL) {
@@ -546,7 +551,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
     /** Natural mapping numbers: integral text → Long (overflow → BigDecimal), else Double
      * (infinite → BigDecimal) — the tree path's naturalNumber, token-for-token. */
-    private Object naturalInt(JoltParser p) {
+    private static Object naturalInt(JoltParser p) {
         String text = p.numberText();
         if (isIntegralForm(text)) {
             try {
@@ -559,7 +564,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
         return Double.isInfinite(d) ? p.bigDecimalValue() : d;
     }
 
-    private Object naturalFloat(JoltParser p) {
+    private static Object naturalFloat(JoltParser p) {
         double d = p.doubleValue();
         return Double.isInfinite(d) ? p.bigDecimalValue() : d;
     }
@@ -579,7 +584,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
         return true;
     }
 
-    private Map<Object, Object> readNaturalObject(JoltParser p, BindConfig config,
+    private static Map<Object, Object> readNaturalObject(JoltParser p, BindConfig config,
                                                   BindPath path) {
         Map<Object, Object> out = new LinkedHashMap<>();
         Token look = p.nextToken();
@@ -597,7 +602,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
         return out;
     }
 
-    private List<Object> readNaturalArray(JoltParser p, BindConfig config, BindPath path) {
+    private static List<Object> readNaturalArray(JoltParser p, BindConfig config, BindPath path) {
         List<Object> out = new ArrayList<>();
         int i = 0;
         Token look = p.nextToken();
@@ -614,7 +619,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
         return out;
     }
 
-    private Object constructEmptyOf(Class<?> raw, BindPath path) {
+    private static Object constructEmptyOf(Class<?> raw, BindPath path) {
         try {
             return DirectBinder.forClass(raw).constructEmpty(path);
         } catch (ClassCastException e) {
@@ -624,7 +629,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
     /** List&lt;X&gt;: the caller-read token must be START_ARRAY, then each element through
      * the element type's read. */
-    private List<Object> readList(JoltParser p, Token first, Plan.PList listPlan,
+    private static List<Object> readList(JoltParser p, Token first, Plan.PList listPlan,
                                   BindConfig config, BindPath path) {
         if (first != Token.START_ARRAY) {
             throw DirectSupport.tagError(p, first, "an array", path);
@@ -647,7 +652,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
     /** Map&lt;String,X&gt;: the caller-read token must be START_OBJECT, each key materialized
      * (map keys are data). */
-    private Map<Object, Object> readMap(JoltParser p, Token first, Plan.PMap mapPlan,
+    private static Map<Object, Object> readMap(JoltParser p, Token first, Plan.PMap mapPlan,
                                         BindConfig config, BindPath path) {
         if (first != Token.START_OBJECT) {
             throw DirectSupport.tagError(p, first, "an object", path);
@@ -674,7 +679,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
      * across calls and across nesting via the pool), so the steady-state allocation is the
      * target array itself. The buffer is implementation scratch; the pool bounds its lifecycle.
      */
-    private Object readArray(JoltParser p, Token first, Plan.PArray arrayPlan,
+    private static Object readArray(JoltParser p, Token first, Plan.PArray arrayPlan,
                              BindConfig config, BindPath path) {
         Class<?> raw = arrayPlan.raw();
         if (first != Token.START_ARRAY) {

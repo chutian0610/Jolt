@@ -209,14 +209,28 @@ class GeneratedBindersTest {
     }
 
     @Test
-    void nonCapableRecordsDeclareNoDirectRead() {
-        // nested record/collection/enum components stay on the reflective direct binder:
-        // registry hit, but no declaration — the facade's documented miss arm
-        TypedBinder<?> order = GeneratedBinders.forType(BindFixtures.Order.class);
-        assertFalse(order instanceof io.github.chutian0610.jolt.bind.GeneratedFields fields
-                && fields.hasDirectRead());
-        assertThrows(UnsupportedOperationException.class, () -> order.parseTokens(null, null));
+    void theWholeM3GraphIsDirectCapableNow() throws Exception {
+        // T3 completed the spectrum: nested records, collections, enums, and POJOs are all
+        // emittable — the Order graph (record child, list of records, map, enum, boxed
+        // null, exact decimals) and the POJO declare BOTH direct forms and the flag
+        for (Class<?> capable : new Class<?>[]{BindFixtures.Order.class,
+                BindFixtures.LabelPojo.class, BindFixtures.Item.class}) {
+            TypedBinder<?> binder = GeneratedBinders.forType(capable);
+            assertTrue(binder instanceof io.github.chutian0610.jolt.bind.GeneratedFields fields
+                    && fields.hasDirectRead(), capable.getName());
+            assertNotNull(binder.getClass().getDeclaredMethod("parseTokens",
+                    io.github.chutian0610.jolt.JoltParser.class, BindConfig.class),
+                    capable.getName());
+            assertNotNull(binder.getClass().getDeclaredMethod("parseTokensBody",
+                    io.github.chutian0610.jolt.JoltParser.class, BindConfig.class),
+                    capable.getName());
+        }
     }
+
+    // NOTE: the visibility-refused fixtures are asserted at the PREDICATE level only
+    // (nonPublicComponentTypesKeepTheRecordOffTheDirectRead) — generating their binders
+    // trips the pre-existing M5 tree-path defect (the emitted initChildren/tree bodies
+    // LDC the non-public component type), which is #49's recorded follow-up ticket.
 
     public record Graded(String course, BindFixtures.Status status) {}
 

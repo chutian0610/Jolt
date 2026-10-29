@@ -85,11 +85,12 @@ final class RecordSpecializer {
     /**
      * The direct-read capability, Class-based so a parent can classify its CHILD components
      * without the child's plan: a public record whose components are all inline strict
-     * scalars (String, boolean, the numeric widths), enums, or nested RECORD components —
-     * the nested read dispatches to the child's own emitted direct body, or the reflective
-     * door ({@code DirectSupport.nestedRecordBody}) when the child has none. A pure
+     * scalars (String, boolean, the numeric widths), enums, nested record/POJO components
+     * (the nested read dispatches to the child's own emitted direct body, or the reflective
+     * door when the child has none), or collection/untyped shapes (the element reads
+     * delegate to the shared Plan-driven value read through the door). A pure
      * component-kind check: no recursion across the CHILD edge, so self-referential records
-     * terminate at generation time. POJO children and collections join with the T3 ticket.
+     * terminate at generation time.
      */
     static boolean isDirectCapable(Class<?> type) {
         if (!type.isRecord() || !java.lang.reflect.Modifier.isPublic(type.getModifiers())) {
@@ -107,7 +108,7 @@ final class RecordSpecializer {
         return isDirectCapable(plan.type);
     }
 
-    private static boolean kindEmittable(Class<?> raw) {
+    static boolean kindEmittable(Class<?> raw) {
         // the emitted bytecode NAMES every reference component type — LDC class constants
         // and CHECKCASTs resolve from the generated class's runtime package, so a
         // non-public component would throw IllegalAccessError at class load where the
@@ -116,9 +117,8 @@ final class RecordSpecializer {
             return false;
         }
         return switch (kindOf(raw)) {
-            case STRING, BOOLEAN, NUMBER, ENUM -> true;
-            case CHILD -> raw.isRecord(); // the nested read: child body call or the door
-            default -> false;             // GENERIC (collections/maps/Object) — the T3 ticket
+            case STRING, BOOLEAN, NUMBER, ENUM, GENERIC -> true;
+            case CHILD -> true; // record or POJO: child body call, or the door
         };
     }
 
@@ -912,6 +912,7 @@ final class RecordSpecializer {
                 case NUMBER -> emitNumberRead(mv, slots, raw, simpleName, slot, tryEnd);
                 case ENUM -> emitEnumRead(mv, slots, raw, simpleName, slot, tryEnd);
                 case CHILD -> emitChildRead(mv, slots, i, raw, slot, tryEnd);
+                case GENERIC -> emitGenericRead(mv, slots, i, raw, slot, tryEnd);
                 default -> throw new IllegalStateException(
                         "component " + plan.names[i] + " is not a direct-read shape");
             }
@@ -992,9 +993,35 @@ final class RecordSpecializer {
                 mv.visitVarInsn(Opcodes.ALOAD, 1);
                 mv.visitVarInsn(Opcodes.ALOAD, 2);
                 mv.visitLdcInsn(Type.getType(raw));
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "nestedRecordBody",
-                        Emit.NESTED_RECORD_BODY_DESC, false);
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "nestedBody",
+                        Emit.NESTED_BODY_DESC, false);
             }
+            mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
+            mv.visitVarInsn(Opcodes.ASTORE, slot);
+            mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
+        }
+
+        /**
+         * Collections, maps, arrays, and untyped Object: the value read delegates to the
+         * shared Plan-driven read through the door — ONE call for the whole value (the
+         * element loops live in the reflective machinery, on the same parser stream). The
+         * element Type is the parent's baked field; polymorphic shapes raise their shared
+         * rejection inside the door.
+         */
+        private void emitGenericRead(MethodVisitor mv, Emit.FrameTracker slots, int i,
+                                     Class<?> raw, int slot, Label tryEnd) {
+            mv.visitVarInsn(Opcodes.ALOAD, 1);
+            mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
+            mv.visitVarInsn(Opcodes.ALOAD, 0);
+            mv.visitFieldInsn(Opcodes.GETFIELD, self, Emit.TYPE_FIELD_PREFIX + i,
+                    "Ljava/lang/reflect/Type;");
+            mv.visitVarInsn(Opcodes.ALOAD, 2);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "readValue",
+                    "(Lio/github/chutian0610/jolt/JoltParser;"
+                            + "Lio/github/chutian0610/jolt/Token;"
+                            + "Ljava/lang/reflect/Type;"
+                            + "Lio/github/chutian0610/jolt/bind/BindConfig;"
+                            + ")Ljava/lang/Object;", false);
             mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
             mv.visitVarInsn(Opcodes.ASTORE, slot);
             mv.visitJumpInsn(Opcodes.GOTO, tryEnd);

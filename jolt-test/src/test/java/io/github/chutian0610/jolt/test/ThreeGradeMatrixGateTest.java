@@ -58,6 +58,73 @@ class ThreeGradeMatrixGateTest {
 
     public record Cloaked(String tag, Hidden hid) {}
 
+    /** The full M3 graph, local: nested record + list of records + map + enum + boxed
+     * null + exact decimals + untyped elements — the ORDER shape with deterministic
+     * generation. */
+    public record FullGraph(String id, Inner inner, List<Inner> items,
+                            java.util.Map<String, Integer> counts, Tier tier,
+                            Integer boxed, long total, java.math.BigInteger sequence,
+                            double ratio, boolean flag, List<Object> any) {}
+
+    /** A local POJO: setters with a primitive, a reference, and a BigInteger parameter. */
+    public static class Crate {
+        private String label;
+        private int weight;
+        private java.math.BigInteger seq;
+
+        public Crate() {}
+
+        public void setLabel(String label) {
+            if (label != null && label.equals("boom")) {
+                throw new IllegalStateException("nope");
+            }
+            this.label = label;
+        }
+
+        public void setWeight(int weight) {
+            this.weight = weight;
+        }
+
+        public void setSeq(java.math.BigInteger seq) {
+            this.seq = seq;
+        }
+
+        public String getLabel() {
+            return label;
+        }
+
+        public int getWeight() {
+            return weight;
+        }
+
+        public java.math.BigInteger getSeq() {
+            return seq;
+        }
+    }
+
+    /** A record with a POJO child: the nested dispatch's POJO arm. */
+    public record Shipment(String id, Crate crate) {}
+
+    /** A polymorphic (abstract) component: the shared rejection through the door. */
+    public abstract static class Base {
+        public Base() {}
+    }
+
+    public record WithBase(Base b) {}
+
+    /** A POJO with an abstract setter parameter: the same rejection, POJO arm. */
+    public static class Flexy {
+        private Base b;
+
+        public void setB(Base b) {
+            this.b = b;
+        }
+
+        public Base getB() {
+            return b;
+        }
+    }
+
     private static byte[] utf8(String json) {
         return json.getBytes(StandardCharsets.UTF_8);
     }
@@ -104,10 +171,14 @@ class ThreeGradeMatrixGateTest {
     }
 
     private static void assertDirectArmFail(String doc, Class<?> type) {
+        assertDirectArmFail(doc, type, BindConfig.defaults());
+    }
+
+    private static void assertDirectArmFail(String doc, Class<?> type, BindConfig base) {
         RuntimeException tree = assertThrows(RuntimeException.class,
-                () -> Bind.parse(utf8(doc), type, BindConfig.defaults()));
+                () -> Bind.parse(utf8(doc), type, base));
         RuntimeException direct = assertThrows(RuntimeException.class,
-                () -> Bind.parse(utf8(doc), type, BindConfig.defaults().withDirect()));
+                () -> Bind.parse(utf8(doc), type, base.withDirect()));
         assertEquals(tree.getClass(), direct.getClass(), doc);
         assertEquals(tree.getMessage(), direct.getMessage(), doc);
         if (tree instanceof JsonBindException tb) {
@@ -165,5 +236,103 @@ class ThreeGradeMatrixGateTest {
         assertDirectArmBind("{\"tag\":\"t\",\"hid\":{\"v\":1}}", Cloaked.class);
         assertDirectArmFail("{\"tag\":\"t\",\"hid\":{\"v\":true}}", Cloaked.class);
         // $.hid.v through the reflective arm
+
+        // T3: the full local graph (nested record + list of records + map + enum + boxed
+        // null + exact decimals + untyped elements) — the three-grade value cell, then the
+        // generated-arm failure family (element paths, the map, the untyped elements)
+        assertThreeGradesBind("{\"id\":\"o\",\"inner\":{\"x\":5,\"price\":1.50,"
+                + "\"tier\":\"PRO\"},\"items\":[{\"x\":1,\"price\":2.5,\"tier\":\"BASIC\"},"
+                + "{\"x\":2,\"price\":92233720368547758079,\"tier\":\"PRO\"}],"
+                + "\"counts\":{\"a\":1,\"b\":2},\"tier\":\"BASIC\",\"boxed\":null,"
+                + "\"total\":9007199254740993,\"sequence\":123456789012345678901234567890,"
+                + "\"ratio\":2.5,\"flag\":true,\"any\":[1,\"s\",true,null,2.5]}", FullGraph.class);
+        assertDirectArmFail("{\"id\":\"o\",\"inner\":{\"x\":1,\"price\":1,\"tier\":\"BASIC\"},"
+                + "\"items\":[{\"x\":1,\"price\":1,\"tier\":\"BASIC\"},"
+                + "{\"x\":\"nine\",\"price\":1,\"tier\":\"BASIC\"}],\"counts\":{},"
+                + "\"tier\":\"BASIC\",\"boxed\":1,\"total\":1,\"sequence\":1,\"ratio\":1.0,"
+                + "\"flag\":false}", FullGraph.class); // $.items[1].x — the element path
+        assertDirectArmFail("{\"id\":\"o\",\"inner\":{\"x\":1,\"price\":1,\"tier\":\"BASIC\"},"
+                + "\"items\":[],\"counts\":{},\"tier\":\"WHO\",\"boxed\":1,\"total\":1,"
+                + "\"sequence\":1,\"ratio\":1.0,\"flag\":false}", FullGraph.class);
+        // $.tier: the unknown enum through the generated read
+        assertDirectArmFail("{\"id\":\"o\",\"inner\":{\"x\":1,\"price\":1,\"tier\":\"BASIC\"},"
+                + "\"items\":[],\"counts\":{},\"tier\":\"BASIC\",\"boxed\":1,\"total\":1,"
+                + "\"sequence\":1.5,\"ratio\":1.0,\"flag\":false}", FullGraph.class);
+        // $.sequence: the BigInteger whole-number rejection
+        assertDirectArmFail("{\"id\":\"o\",\"inner\":{\"x\":1,\"price\":1,\"tier\":\"BASIC\"},"
+                + "\"items\":[],\"counts\":{},\"tier\":\"BASIC\",\"boxed\":1,\"total\":1,"
+                + "\"sequence\":1,\"ratio\":1.0,\"flag\":false,\"any\":{\"sneaky\":1},"
+                + "\"sneaky\":2}", FullGraph.class,
+                BindConfig.defaults().withFailOnUnknown()); // the unknown family
+        assertDirectArmBind("{\"id\":\"o\",\"inner\":{\"x\":1,\"price\":1,\"tier\":\"BASIC\"},"
+                + "\"items\":[],\"counts\":{},\"tier\":\"BASIC\",\"boxed\":1,\"total\":1,"
+                + "\"sequence\":1,\"ratio\":1.0,\"flag\":false,"
+                + "\"any\":[1,\"s\",true,null,2.5,{\"k\":{\"n\":[9.5]}}]}",
+                FullGraph.class); // the untyped natural mapping (Long/Double/BigDecimal/map)
+
+        // the local POJO: the three-grade cell is its SETTER-REJECTION failure (the first
+        // cell, while ungenerated), then the value family on the generated arm
+        assertThreeGradesFail("{\"label\":\"boom\",\"weight\":1}", Crate.class);
+        // $.label: "setter rejected the bound value: java.lang.IllegalStateException: nope"
+        // Crate has identity equals — the value cells compare the write bytes + getters
+        Crate okTree = Bind.parse(utf8("{\"label\":\"ok\",\"weight\":7}"), Crate.class,
+                BindConfig.defaults());
+        Crate okDirect = Bind.parse(utf8("{\"label\":\"ok\",\"weight\":7}"), Crate.class,
+                BindConfig.defaults().withDirect());
+        assertEquals("ok", okDirect.getLabel());
+        assertEquals(7, okDirect.getWeight());
+        assertEquals(Bind.write(okTree), Bind.write(okDirect));
+        Crate sparse = Bind.parse(utf8("{\"weight\":7}"), Crate.class,
+                BindConfig.defaults().withDirect());
+        assertNull(sparse.getLabel()); // absent label stays default
+        assertEquals(7, sparse.getWeight());
+        Crate scalarRoot = Bind.parse(utf8("5"), Crate.class,
+                BindConfig.defaults().withDirect());
+        assertNull(scalarRoot.getLabel()); // the scalar root: the default instance
+        assertEquals(0, scalarRoot.getWeight());
+        assertDirectArmFail("{\"label\":\"x\",\"weight\":null}", Crate.class);
+        // JSON null for the primitive $.weight
+
+        // the DECLARATION-ORDER pin: two errors in one document — the setter table sorts
+        // label < weight, so the sweep raises the $.label REJECTION (declared first), not
+        // the document-first $.weight type mismatch
+        assertDirectArmFail("{\"weight\":\"nine\",\"label\":\"boom\"}", Crate.class);
+
+        // the POJO BigInteger cell: the exact read AND the fraction rejection (the lossy
+        // handler) through the generated arm
+        Crate seqTree = Bind.parse(utf8("{\"label\":\"x\",\"weight\":1,"
+                + "\"seq\":123456789012345678901234567890}"), Crate.class,
+                BindConfig.defaults());
+        Crate seqDirect = Bind.parse(utf8("{\"label\":\"x\",\"weight\":1,"
+                + "\"seq\":123456789012345678901234567890}"), Crate.class,
+                BindConfig.defaults().withDirect());
+        assertEquals(new java.math.BigInteger("123456789012345678901234567890"),
+                seqDirect.getSeq());
+        assertEquals(Bind.write(seqTree), Bind.write(seqDirect));
+        assertDirectArmFail("{\"label\":\"x\",\"weight\":1,\"seq\":12.5}", Crate.class);
+        // $.seq: number is not a whole number
+
+        // a record whose child is a POJO: the nested dispatch's POJO arm — the three-grade
+        // proof compares WRITES (Crate has identity equals), then the child's own setter
+        // rejection at the nested path
+        assertNull(Bind.generatedLookupForTest(Shipment.class));
+        String shipDoc = "{\"id\":\"s\",\"crate\":{\"label\":\"ok\",\"weight\":3,\"seq\":42}}";
+        var shipTree = Bind.parse(utf8(shipDoc), Shipment.class, BindConfig.defaults());
+        var shipRefl = Bind.parse(utf8(shipDoc), Shipment.class,
+                BindConfig.defaults().withDirect());
+        GeneratedBinders.forType(Shipment.class);
+        var shipGen = Bind.parse(utf8(shipDoc), Shipment.class,
+                BindConfig.defaults().withDirect());
+        assertEquals(Bind.write(shipTree), Bind.write(shipRefl));
+        assertEquals(Bind.write(shipTree), Bind.write(shipGen));
+        assertDirectArmFail("{\"id\":\"s\",\"crate\":{\"label\":\"boom\",\"weight\":3,"
+                + "\"seq\":42}}", Shipment.class); // $.crate.label: the child's rejection
+
+        // the POJO polymorphic rejection through the door (the abstract setter parameter)
+        assertDirectArmFail("{\"b\":{}}", Flexy.class);
+        // the POJO twin
+
+        // the polymorphic rejection through the door: the same message, three grades
+        assertThreeGradesFail("{\"b\":{}}", WithBase.class);
     }
 }

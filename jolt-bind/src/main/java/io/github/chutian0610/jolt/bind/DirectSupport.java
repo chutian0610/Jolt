@@ -166,16 +166,51 @@ public final class DirectSupport {
     }
 
     /**
-     * The nested-record door: the child record's body read for a value whose START_OBJECT
-     * the caller already consumed (the child continues the caller's cursor; the caller owns
-     * the path position, the error slotting, and the drain). This is the reflective arm of
-     * the generated parent's nested dispatch — used when the child has no emitted direct
-     * body (non-capable or non-public child). Recursion converges through the per-class
-     * binder cache (self-referential records terminate on finite documents).
+     * The nested door: the child's body read for a value whose START_OBJECT the caller
+     * already consumed (the child continues the caller's cursor; the caller owns the path
+     * position, the error slotting, and the drain). This is the reflective arm of the
+     * generated parent's nested dispatch — used when the child has no emitted direct body.
+     * Recursion converges through the per-class binder cache (self-referential records
+     * terminate on finite documents).
      */
-    public static Object nestedRecordBody(JoltParser p, BindConfig config, Class<?> childType) {
-        return DirectBinder.forClass(childType)
-                .readRecordBody(p, config, STATE.get().path, Token.START_OBJECT);
+    public static Object nestedBody(JoltParser p, BindConfig config, Class<?> childType) {
+        DirectBinder<?> child = DirectBinder.forClass(childType);
+        return child.readBody(p, config, STATE.get().path, Token.START_OBJECT);
+    }
+
+    /**
+     * The value-read door for the generated arm's delegated reads (collection elements,
+     * map values, untyped Object): the caller consumed the value's first token and holds
+     * the path position; the element Type is the parent's baked constant. The Plan resolves
+     * once per Type (the per-call reflection the M6-T4 plan refactor removed stays gone).
+     */
+    public static Object readValue(JoltParser p, Token first, java.lang.reflect.Type targetType,
+                                   BindConfig config) {
+        return DirectBinder.readValue(p, first, DirectBinder.planFor(targetType), config,
+                STATE.get().path);
+    }
+
+    /** The guarded setter invoke's rejection, at the CURRENT path position — the raw cause
+     * interpolates exactly like the reflective arm's {@code getCause()} message. RETURNS
+     * the exception (it does not throw): the generated read's handler passes it to ATHROW,
+     * the reflective body slots it with {@code noteError}. */
+    public static JsonBindException setterRejected(Throwable cause) {
+        return setterRejected(cause, STATE.get().path);
+    }
+
+    /** The no-arg construction failure ("cannot instantiate"), at the CURRENT path
+     * position. */
+    public static RuntimeException cannotInstantiate(String typeName) {
+        return cannotInstantiate(typeName, STATE.get().path);
+    }
+
+    /**
+     * The POJO body's error sweep, shared by both direct grades: declaration-order slot
+     * errors, then the first unknown field — absent properties stay default (there is no
+     * missing check), at the CURRENT path position.
+     */
+    public static void sweepPojoErrors(Object[] errors, String unknownKey) {
+        sweepPojoErrors(errors, unknownKey, STATE.get().path);
     }
 
     // --- the explicit-path cores (the reflective direct binder's call sites) ---
@@ -235,6 +270,35 @@ public final class DirectSupport {
     static RuntimeException constructorRejected(Throwable cause, BindPath path) {
         throw new JsonBindException("record constructor rejected the bound values: " + cause,
                 path.resolve());
+    }
+
+    /** The guarded setter invoke's rejection. */
+    static JsonBindException setterRejected(Throwable cause, BindPath path) {
+        return new JsonBindException("setter rejected the bound value: " + cause,
+                path.resolve());
+    }
+
+    /** The no-arg construction failure. */
+    static RuntimeException cannotInstantiate(String typeName, BindPath path) {
+        throw new JsonBindException("cannot instantiate " + typeName, path.resolve());
+    }
+
+    /**
+     * The POJO body's error sweep core: declaration-order slot errors, then the first
+     * unknown field — absent properties stay default (there is no missing check).
+     */
+    static void sweepPojoErrors(Object[] errors, String unknownKey, BindPath path) {
+        if (errors != null) {
+            for (int i = 0; i < errors.length; i++) {
+                if (errors[i] instanceof JsonBindException e) {
+                    throw e;
+                }
+            }
+        }
+        if (unknownKey != null) {
+            throw new JsonBindException("unknown field '" + unknownKey + "'",
+                    path.resolve() + "." + unknownKey);
+        }
     }
 
     /**

@@ -83,7 +83,7 @@ public final class GenPlan<T> {
     }
 
     /** Setters sorted by name — deterministic fail-on-unknown diagnostics and writes. */
-    private static String[] setterNames(Class<?> type) {
+    static String[] setterNames(Class<?> type) {
         List<String> out = new java.util.ArrayList<>();
         for (Method method : type.getMethods()) {
             if (method.getName().startsWith("set")

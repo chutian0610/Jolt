@@ -44,7 +44,7 @@ final class Emit {
     static final String GEN_BASE_PARSE_TOKENS_BODY_DESC =
             "(Lio/github/chutian0610/jolt/JoltParser;"
                     + "Lio/github/chutian0610/jolt/bind/BindConfig;)Ljava/lang/Object;";
-    static final String NESTED_RECORD_BODY_DESC =
+    static final String NESTED_BODY_DESC =
             "(Lio/github/chutian0610/jolt/JoltParser;"
                     + "Lio/github/chutian0610/jolt/bind/BindConfig;"
                     + "Ljava/lang/Class;)Ljava/lang/Object;";
