@@ -38,7 +38,7 @@ public final class Bind {
     public static <T> T parse(byte[] json, Class<T> type, BindConfig config) {
         if (config.direct() && java.lang.reflect.Modifier.isPublic(type.getModifiers())) {
             // non-public targets keep the M4 fallback contract: the reflective (tree) binder
-            return DirectBinder.forClass(type).parseDirect(json, config);
+            return parseDirect(json, type, config);
         }
         return fromNode(Tree.parse(json), type, config, "$");
     }
@@ -51,9 +51,34 @@ public final class Bind {
     /** Loads a String document under an explicit binding configuration (the UTF-16 engine). */
     public static <T> T parse(String json, Class<T> type, BindConfig config) {
         if (config.direct() && java.lang.reflect.Modifier.isPublic(type.getModifiers())) {
-            return DirectBinder.forClass(type).parseDirect(json, config);
+            return parseDirect(json, type, config);
         }
         return fromNode(Tree.parse(json), type, config, "$");
+    }
+
+    /**
+     * The direct arm's dispatch: the generated registry upgrades first — a generated binder
+     * that DECLARES the direct read ({@code hasDirectRead}) consumes the tokens itself;
+     * a registry hit without a direct read (and the outright miss) keeps the reflective
+     * direct binder, unchanged. Both grades reuse the thread's parser pair and path carrier
+     * through {@link DirectSupport}.
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> T parseDirect(byte[] json, Class<T> type, BindConfig config) {
+        TypedBinder<?> generated = GENERATED.get(type);
+        if (generated instanceof GeneratedFields fields && fields.hasDirectRead()) {
+            return ((TypedBinder<T>) generated).parseTokens(DirectSupport.parserFor(json), config);
+        }
+        return DirectBinder.<T>forClass(type).parseDirect(json, config);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T> T parseDirect(String json, Class<T> type, BindConfig config) {
+        TypedBinder<?> generated = GENERATED.get(type);
+        if (generated instanceof GeneratedFields fields && fields.hasDirectRead()) {
+            return ((TypedBinder<T>) generated).parseTokens(DirectSupport.parserFor(json), config);
+        }
+        return DirectBinder.<T>forClass(type).parseDirect(json, config);
     }
 
     /** Serializes a bound value as compact JSON. */

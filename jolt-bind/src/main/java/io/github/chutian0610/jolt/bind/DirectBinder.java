@@ -2,8 +2,6 @@ package io.github.chutian0610.jolt.bind;
 
 import io.github.chutian0610.jolt.JoltParser;
 import io.github.chutian0610.jolt.Token;
-import io.github.chutian0610.jolt.Utf16Parser;
-import io.github.chutian0610.jolt.Utf8Parser;
 import io.github.chutian0610.jolt.tree.Node;
 
 import java.lang.reflect.Constructor;
@@ -25,11 +23,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>Semantics mirror the tree path instruction for instruction — strict tag checks with the
  * same messages in the same component-declaration priority order, the three-null contract,
  * unknown fields per config (the first key reported), polymorphic rejection, and the same
- * `$`-rooted paths (assembled lazily from the path carrier). Values are read type-driven
- * through {@link #readValue} — the same code path for components, collection elements, and
- * natural mapping. Field-name matching is zero-allocation
- * ({@link JoltParser#fieldNameEquals}); per-thread parsers are reused via {@code reset} (the
- * M1 reuse discipline).
+ * `$`-rooted paths (assembled lazily from the path carrier). The error semantics live on
+ * {@link DirectSupport} — the explicit-path cores below are this arm's call sites and the
+ * public wrappers are the generated direct read's INVOKESTATIC targets — so both direct
+ * grades share one implementation. Values are read type-driven through {@link #readValue} —
+ * the same code path for components, collection elements, and natural mapping. Field-name
+ * matching is zero-allocation ({@link JoltParser#fieldNameEquals}); per-thread parsers are
+ * reused via {@code reset} (the M1 reuse discipline).
  */
 final class DirectBinder<T> implements TypedBinder<T> {
 
@@ -125,21 +125,6 @@ final class DirectBinder<T> implements TypedBinder<T> {
     private final boolean[] primitives;
     private final Constructor<T> constructor; // record canonical | POJO public no-arg
     private final Method[] setters;           // POJO only, sorted by name
-    private static final ThreadLocal<DirectState> STATE = ThreadLocal.withInitial(DirectState::new);
-
-    /** The shared per-thread state (path stack + parser pair) — the generated direct read
-     * consumes the same state through these static accessors. */
-    static BindPath statePath() {
-        return STATE.get().path;
-    }
-
-    static JoltParser stateParserFor(byte[] json) {
-        return STATE.get().parserFor(json);
-    }
-
-    static JoltParser stateParserFor(String json) {
-        return STATE.get().parserFor(json);
-    }
 
     private DirectBinder(Class<T> type, Shape shape) {
         this.type = type;
@@ -257,7 +242,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
     @Override
     public T parseTokens(JoltParser parser, BindConfig config) {
-        BindPath path = STATE.get().path;
+        BindPath path = DirectSupport.statePath();
         path.reset();
         Token first = parser.nextToken();
         if (first != Token.START_OBJECT) {
@@ -282,12 +267,12 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
     /** Facade convenience: reuses the thread's parser (steady-state allocation = target graph). */
     T parseDirect(byte[] json, BindConfig config) {
-        return parseTokens(STATE.get().parserFor(json), config);
+        return parseTokens(DirectSupport.parserFor(json), config);
     }
 
     /** Facade convenience over the UTF-16 engine. */
     T parseDirect(String json, BindConfig config) {
-        return parseTokens(STATE.get().parserFor(json), config);
+        return parseTokens(DirectSupport.parserFor(json), config);
     }
 
     private T constructEmpty(BindPath path) {
@@ -302,13 +287,16 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
     private T readRecordBody(JoltParser p, BindConfig config, BindPath path, Token first) {
         Object[] args = new Object[names.length]; // null = missing (reference nulls and
-        // missing components are indistinguishable by design — both bind as null)
+        // missing components are indistinguishable by design — both bind as null). The
+        // construction bridge the generated direct read replaces with stack-passed locals.
         // The tree path raises errors in COMPONENT-DECLARATION order (it loops the component
-        // table); the token stream arrives in DOCUMENT order. Errors therefore land in
-        // lazily-allocated slots (the failure path may allocate — ADR-0005) and the
-        // highest-priority one is raised after the object closes. The unknown-field check
-        // runs after that, exactly like the tree path's keys scan.
+        // table); the token stream arrives in DOCUMENT order. Errors land in the shared
+        // lazily-allocated slots (the failure path may allocate — ADR-0005) and the shared
+        // declaration-order sweep raises the highest-priority one after the object closes —
+        // the SAME DirectSupport call the generated read makes, then the unknown-field check.
         Object[] errors = null;
+        boolean[] seen = DirectSupport.takeSeen(names.length);
+        java.util.Arrays.fill(seen, false);
         String unknownKey = null;
         Token t = first;
         while ((t = p.nextToken()) != Token.END_OBJECT) {
@@ -321,10 +309,10 @@ final class DirectBinder<T> implements TypedBinder<T> {
                 }
             }
             if (comp < 0) {
-                unknownKey = noteUnknown(p, config, unknownKey);
-                skipValue(p);
+                unknownKey = DirectSupport.skipOrNoteUnknown(p, config, unknownKey);
                 continue;
             }
+            seen[comp] = true;
             path.pushName(names[comp]);
             Token valueToken = p.nextToken();
             try {
@@ -333,34 +321,17 @@ final class DirectBinder<T> implements TypedBinder<T> {
                 // the error is recorded in the component's slot; a container value has
                 // already been skipped by the throw site, scalar tokens were consumed by
                 // the read — the field loop stays aligned either way
-                if (errors == null) {
-                    errors = new Object[names.length];
-                }
-                errors[comp] = e;
+                errors = DirectSupport.noteError(errors, comp, e, names.length);
             }
             path.pop();
         }
-        // declaration-order error sweep: tag/JSON-null errors and the missing check
-        // interleaved by component index — one declaration-order loop, like the tree path
-        for (int i = 0; i < names.length; i++) {
-            if (errors != null && errors[i] instanceof JsonBindException e) {
-                throw e;
-            }
-            if (args[i] == null && primitives[i]) {
-                throw new JsonBindException("missing value for primitive component "
-                        + simpleNames[i], path.resolve() + "." + names[i]);
-            }
-        }
-        if (unknownKey != null) {
-            throw new JsonBindException("unknown field '" + unknownKey + "'",
-                    path.resolve() + "." + unknownKey);
-        }
+        DirectSupport.sweepRecordErrors(errors, seen, unknownKey, path,
+                names, primitives, simpleNames);
+        DirectSupport.returnSeen(seen);
         try {
             return constructor.newInstance(args);
         } catch (InvocationTargetException e) {
-            throw new JsonBindException(
-                    "record constructor rejected the bound values: " + e.getCause(),
-                    path.resolve());
+            throw DirectSupport.constructorRejected(e.getCause(), path);
         } catch (ReflectiveOperationException e) {
             throw new JsonBindException(
                     "cannot construct " + type.getName() + ": " + e, path.resolve());
@@ -390,8 +361,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
                 }
             }
             if (comp < 0) {
-                unknownKey = noteUnknown(p, config, unknownKey);
-                skipValue(p);
+                unknownKey = DirectSupport.skipOrNoteUnknown(p, config, unknownKey);
                 continue;
             }
             path.pushName(names[comp]);
@@ -433,14 +403,6 @@ final class DirectBinder<T> implements TypedBinder<T> {
         return instance;
     }
 
-    /** The first unknown key's name materializes only when strict mode demands it. */
-    private static String noteUnknown(JoltParser p, BindConfig config, String recorded) {
-        if (config.failOnUnknown() && recorded == null) {
-            return p.textValue();
-        }
-        return recorded;
-    }
-
     // --- the type-driven value read (components, elements, and natural mapping share it) ---
 
     @SuppressWarnings("unchecked")
@@ -452,8 +414,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
         Token t = first;
         if (t == Token.VALUE_NULL) {
             if (plan instanceof Plan.PScalar scalar && scalar.primitive()) {
-                throw new JsonBindException("JSON null for primitive component "
-                        + scalar.simpleName(), path.resolve());
+                throw DirectSupport.nullForPrimitive(scalar.simpleName(), path);
             }
             return null;
         }
@@ -463,7 +424,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
                 switch (raw.getSimpleName()) {
                     case "String" -> {
                         if (t != Token.VALUE_STRING) {
-                            throw tagError(p, t, "a string", path);
+                            throw DirectSupport.tagError(p, t, "a string", path);
                         }
                         return p.textValue();
                     }
@@ -474,61 +435,57 @@ final class DirectBinder<T> implements TypedBinder<T> {
                         if (t == Token.VALUE_FALSE) {
                             return Boolean.FALSE;
                         }
-                        throw tagError(p, t, "a boolean", path);
+                        throw DirectSupport.tagError(p, t, "a boolean", path);
                     }
                     case "byte", "Byte" -> {
-                        long v = readLong(p, t, path);
+                        long v = DirectSupport.readLongChecked(p, t, path);
                         if (v > Byte.MAX_VALUE || v < Byte.MIN_VALUE) {
-                            throw new JsonBindException("number does not fit in "
-                                    + scalar.simpleName(), path.resolve());
+                            throw DirectSupport.boundError(scalar.simpleName(), path);
                         }
                         return Byte.valueOf((byte) v);
                     }
                     case "short", "Short" -> {
-                        long v = readLong(p, t, path);
+                        long v = DirectSupport.readLongChecked(p, t, path);
                         if (v > Short.MAX_VALUE || v < Short.MIN_VALUE) {
-                            throw new JsonBindException("number does not fit in "
-                                    + scalar.simpleName(), path.resolve());
+                            throw DirectSupport.boundError(scalar.simpleName(), path);
                         }
                         return Short.valueOf((short) v);
                     }
                     case "int", "Integer" -> {
-                        long v = readLong(p, t, path);
+                        long v = DirectSupport.readLongChecked(p, t, path);
                         if (v > Integer.MAX_VALUE || v < Integer.MIN_VALUE) {
-                            throw new JsonBindException("number does not fit in "
-                                    + scalar.simpleName(), path.resolve());
+                            throw DirectSupport.boundError(scalar.simpleName(), path);
                         }
                         return Integer.valueOf((int) v);
                     }
                     case "long", "Long" -> {
-                        return Long.valueOf(readLong(p, t, path));
+                        return Long.valueOf(DirectSupport.readLongChecked(p, t, path));
                     }
                     case "float", "Float" -> {
-                        requireNumber(p, t, path);
+                        DirectSupport.requireNumber(p, t, path);
                         return Float.valueOf(p.bigDecimalValue().floatValue());
                     }
                     case "double", "Double" -> {
-                        requireNumber(p, t, path);
+                        DirectSupport.requireNumber(p, t, path);
                         return Double.valueOf(p.bigDecimalValue().doubleValue());
                     }
                     case "BigDecimal" -> {
-                        requireNumber(p, t, path);
+                        DirectSupport.requireNumber(p, t, path);
                         return p.bigDecimalValue();
                     }
                     default -> { // BigInteger
-                        requireNumber(p, t, path);
+                        DirectSupport.requireNumber(p, t, path);
                         try {
                             return p.bigDecimalValue().toBigIntegerExact();
                         } catch (ArithmeticException lossy) {
-                            throw new JsonBindException("number is not a whole number",
-                                    path.resolve());
+                            throw DirectSupport.notWholeNumber(path);
                         }
                     }
                 }
             }
             case Plan.PEnum enumPlan -> {
                 if (t != Token.VALUE_STRING) {
-                    throw tagError(p, t, "a string", path);
+                    throw DirectSupport.tagError(p, t, "a string", path);
                 }
                 String text = p.textValue();
                 try {
@@ -554,7 +511,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
             case Plan.PRecord recordPlan -> {
                 if (t != Token.START_OBJECT) {
-                    throw tagError(p, t, "an object", path);
+                    throw DirectSupport.tagError(p, t, "an object", path);
                 }
                 // the child's OWN binder carries the child's component table — recursion
                 // happens at runtime through the cache (self-referential records converge;
@@ -670,7 +627,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
     private List<Object> readList(JoltParser p, Token first, Plan.PList listPlan,
                                   BindConfig config, BindPath path) {
         if (first != Token.START_ARRAY) {
-            throw tagError(p, first, "an array", path);
+            throw DirectSupport.tagError(p, first, "an array", path);
         }
         List<Object> out = new ArrayList<>();
         int i = 0;
@@ -693,7 +650,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
     private Map<Object, Object> readMap(JoltParser p, Token first, Plan.PMap mapPlan,
                                         BindConfig config, BindPath path) {
         if (first != Token.START_OBJECT) {
-            throw tagError(p, first, "an object", path);
+            throw DirectSupport.tagError(p, first, "an object", path);
         }
         Map<Object, Object> out = new LinkedHashMap<>();
         Token look = p.nextToken();
@@ -721,10 +678,9 @@ final class DirectBinder<T> implements TypedBinder<T> {
                              BindConfig config, BindPath path) {
         Class<?> raw = arrayPlan.raw();
         if (first != Token.START_ARRAY) {
-            throw tagError(p, first, "an array", path);
+            throw DirectSupport.tagError(p, first, "an array", path);
         }
-        DirectState st = STATE.get();
-        Object[] buffer = st.takeBuffer();
+        Object[] buffer = DirectSupport.takeBuffer();
         int len = 0;
         try {
             int i = 0;
@@ -751,145 +707,13 @@ final class DirectBinder<T> implements TypedBinder<T> {
             for (int j = 0; j < len; j++) {
                 buffer[j] = null; // release the element references into the pooled scratch
             }
-            st.returnBuffer(buffer);
+            DirectSupport.returnBuffer(buffer);
         }
     }
 
-    /** VALUE_NUMBER_INT with the promotion-strategy overflow message; anything else is a tag error. */
-    private long readLong(JoltParser p, Token t, BindPath path) {
-        if (t != Token.VALUE_NUMBER_INT) {
-            throw tagError(p, t, "a number", path);
-        }
-        try {
-            return p.longValue();
-        } catch (ArithmeticException beyondLong) {
-            throw new JsonBindException("number does not fit in a long", path.resolve());
-        }
-    }
-
-    private void requireNumber(JoltParser p, Token t, BindPath path) {
-        if (t != Token.VALUE_NUMBER_INT && t != Token.VALUE_NUMBER_FLOAT) {
-            throw tagError(p, t, "a number", path);
-        }
-    }
-
-    // --- the shared error helpers (INVOKESTATIC targets for the generated direct read) ---
-    // One home for the error semantics: both direct grades call these, so the declaration-
-    // order contract and the message shapes cannot drift between adapters.
-
-    /** The tree layer's tag-rejection message at the value's path. A container value is
-     * skipped before the throw so the field loop stays aligned. */
-    static RuntimeException tagError(JoltParser p, Token t, String wanted, BindPath path) {
-        if (t == Token.START_OBJECT || t == Token.START_ARRAY) {
-            p.skipChildren();
-        }
-        throw new JsonBindException(
-                "expected " + wanted + " but found " + tagName(t), path.resolve());
-    }
-
-    /** VALUE_NUMBER_INT or the promotion-strategy overflow message — the shared long read. */
-    static long readLongChecked(JoltParser p, Token t, BindPath path) {
-        if (t != Token.VALUE_NUMBER_INT) {
-            throw tagError(p, t, "a number", path);
-        }
-        try {
-            return p.longValue();
-        } catch (ArithmeticException beyondLong) {
-            throw new JsonBindException("number does not fit in a long", path.resolve());
-        }
-    }
-
-    /** JSON null against a primitive component — the shared throw. */
-    static RuntimeException nullForPrimitive(String simpleName, BindPath path) {
-        throw new JsonBindException("JSON null for primitive component " + simpleName,
-                path.resolve());
-    }
-
-    /** The shared width-overflow throw (message from the component's getSimpleName). */
-    static RuntimeException boundError(String simpleName, BindPath path) {
-        throw new JsonBindException("number does not fit in " + simpleName, path.resolve());
-    }
-
-    /**
-     * Records a component error in the lazily-allocated slot array (the failure path may
-     * allocate — ADR-0005); returns the array to store back. The generated bytecode calls
-     * this after catching {@link JsonBindException} around a component read.
-     */
-    static Object[] noteError(Object[] errors, int slot, JsonBindException e, int componentCount) {
-        Object[] out = errors != null ? errors : new Object[componentCount];
-        out[slot] = e;
-        return out;
-    }
-
-    /**
-     * The unknown-field shared semantics: materializes the FIRST unknown key's name only
-     * when strict mode demands it (and only once), then consumes the value. Returns the
-     * updated recorded key.
-     */
-    static String skipOrNoteUnknown(JoltParser p, BindConfig config, String recorded) {
-        if (config.failOnUnknown() && recorded == null) {
-            recorded = p.textValue();
-        }
-        skipValueStatic(p);
-        return recorded;
-    }
-
-    private static void skipValueStatic(JoltParser p) {
-        Token t = p.nextToken();
-        if (t == Token.START_OBJECT || t == Token.START_ARRAY) {
-            p.skipChildren();
-        }
-    }
-
-    /**
-     * The record body's error sweep, shared by both direct grades: declaration-order slot
-     * errors, then missing primitives, then the first unknown field — the tree path's
-     * raising order. Returns normally when the body may construct.
-     */
-    static void sweepRecordErrors(Object[] errors, boolean[] seen, String unknownKey,
-                                  BindPath path, String[] names, boolean[] primitives,
-                                  String[] simpleNames) {
-        for (int i = 0; i < names.length; i++) {
-            if (errors != null && errors[i] instanceof JsonBindException e) {
-                throw e;
-            }
-            if (!seen[i] && primitives[i]) {
-                throw new JsonBindException("missing value for primitive component "
-                        + simpleNames[i], path.resolve() + "." + names[i]);
-            }
-        }
-        if (unknownKey != null) {
-            throw new JsonBindException("unknown field '" + unknownKey + "'",
-                    path.resolve() + "." + unknownKey);
-        }
-    }
-
-    /** The seen-flag scratch: pooled per-thread (nesting takes its own array), zeroed by
-     * the caller's reset before use. */
-    static boolean[] takeSeen(int length) {
-        return STATE.get().takeSeen(length);
-    }
-
-    static void returnSeen(boolean[] seen) {
-        STATE.get().returnSeen(seen);
-    }
-
-    static void resetSeen(boolean[] seen) {
-        java.util.Arrays.fill(seen, false);
-    }
-
-    /** The tree layer's TypeTag names, from the streaming token. */
-    private static String tagName(Token t) {
-        return switch (t) {
-            case VALUE_STRING -> "STRING";
-            case VALUE_NUMBER_INT, VALUE_NUMBER_FLOAT -> "NUMBER";
-            case VALUE_TRUE, VALUE_FALSE -> "BOOLEAN";
-            case VALUE_NULL -> "NULL";
-            case START_OBJECT, FIELD_NAME -> "OBJECT";
-            case START_ARRAY -> "ARRAY";
-            default -> throw new IllegalStateException("unexpected token " + t);
-        };
-    }
+    // --- the shared error semantics live on DirectSupport: the explicit-path cores are the
+    // reflective arm's call sites, the public wrappers are the generated read's INVOKESTATIC
+    // targets — one home, both direct grades. ---
 
     /**
      * A non-object document root: the tree path reads every component as missing and the
@@ -903,73 +727,6 @@ final class DirectBinder<T> implements TypedBinder<T> {
                         + simpleNames[i], path.resolve() + "." + names[i]);
             }
         }
-        throw new UnsupportedOperationException(
-                "all-reference records bind from non-object documents with the M6 spectrum tickets");
-    }
-
-    /**
-     * Consumes the value after an unmatched field name: containers skip whole (zero
-     * decoding), scalar value tokens are already the next token and just get consumed by
-     * the loop's next FIELD_NAME step.
-     */
-    private void skipValue(JoltParser p) {
-        Token t = p.nextToken();
-        if (t == Token.START_OBJECT || t == Token.START_ARRAY) {
-            p.skipChildren();
-        }
-    }
-
-    /** Per-thread parser pair, path stack, array scratch pool, and seen-flag scratch (the
-     * M1 reuse discipline, applied to binding). */
-    private static final class DirectState {
-        final BindPath path = new BindPath();
-        private final java.util.ArrayDeque<Object[]> bufferPool = new java.util.ArrayDeque<>();
-        private final java.util.ArrayDeque<boolean[]> seenPool = new java.util.ArrayDeque<>();
-        private Utf8Parser utf8;
-        private Utf16Parser utf16;
-
-        boolean[] takeSeen(int length) {
-            boolean[] pooled = seenPool.pollFirst();
-            if (pooled != null && pooled.length >= length) {
-                return pooled;
-            }
-            if (pooled != null) {
-                seenPool.addFirst(pooled); // too small for this body — back to the pool
-            }
-            return new boolean[Math.max(length, 8)];
-        }
-
-        void returnSeen(boolean[] seen) {
-            if (seenPool.size() < 8) {
-                seenPool.addFirst(seen);
-            }
-        }
-
-        Object[] takeBuffer() {
-            Object[] buffered = bufferPool.pollFirst();
-            return buffered != null ? buffered : new Object[8];
-        }
-
-        void returnBuffer(Object[] buffer) {
-            if (bufferPool.size() < 8) {
-                bufferPool.addFirst(buffer);
-            }
-        }
-
-        JoltParser parserFor(byte[] json) {
-            if (utf8 == null) {
-                utf8 = io.github.chutian0610.jolt.Jolt.utf8Parser(json);
-                return utf8;
-            }
-            return utf8.reset(json);
-        }
-
-        JoltParser parserFor(String json) {
-            if (utf16 == null) {
-                utf16 = io.github.chutian0610.jolt.Jolt.utf16Parser(json);
-                return utf16;
-            }
-            return utf16.reset(json);
-        }
+        throw DirectSupport.nonObjectRecordRoot();
     }
 }

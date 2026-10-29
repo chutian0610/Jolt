@@ -186,4 +186,35 @@ class GeneratedBindersTest {
         assertEquals("b", head.next().name());
         assertNull(head.next().next());
     }
+
+    @Test
+    void directCapableRecordsDeclareTheTokenReadAndTheFlag() throws Exception {
+        // the third form rides the SAME instance: the capability flag plus the declared
+        // parseTokens — and the generated read binds the canonical document exactly like
+        // the tree path
+        TypedBinder<BindFixtures.Scalars> binder =
+                GeneratedBinders.forType(BindFixtures.Scalars.class);
+        assertTrue(binder instanceof io.github.chutian0610.jolt.bind.GeneratedFields fields
+                && fields.hasDirectRead());
+        assertNotNull(binder.getClass().getDeclaredMethod("parseTokens",
+                io.github.chutian0610.jolt.JoltParser.class, BindConfig.class));
+
+        BindFixtures.Scalars direct = binder.parseTokens(
+                Jolt.utf8Parser(BindFixtures.SCALARS_JSON.getBytes(StandardCharsets.UTF_8)),
+                BindConfig.defaults());
+        BindFixtures.Scalars tree = binder.parse(
+                Tree.parse(BindFixtures.SCALARS_JSON.getBytes(StandardCharsets.UTF_8)), "$",
+                BindConfig.defaults());
+        assertEquals(tree, direct);
+    }
+
+    @Test
+    void nonCapableRecordsDeclareNoDirectRead() {
+        // nested record/collection/enum components stay on the reflective direct binder:
+        // registry hit, but no declaration — the facade's documented miss arm
+        TypedBinder<?> order = GeneratedBinders.forType(BindFixtures.Order.class);
+        assertFalse(order instanceof io.github.chutian0610.jolt.bind.GeneratedFields fields
+                && fields.hasDirectRead());
+        assertThrows(UnsupportedOperationException.class, () -> order.parseTokens(null, null));
+    }
 }

@@ -12,7 +12,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 /**
  * The direct-bind tracer gate: the SAME document through BOTH config arms (tree default /
  * withDirect) — values equal, exceptions byte-identical (type, path, message). Any divergence
- * between the read paths is a gate failure, not a footnote.
+ * between the read paths is a gate failure, not a footnote. This module's classpath carries
+ * no jolt-gen, so the facade's direct arm here IS the reflective direct binder; the
+ * generated direct grade is held to the same cells by jolt-test's GeneratedDirectTracerGateTest.
  */
 class DirectBindTest {
 

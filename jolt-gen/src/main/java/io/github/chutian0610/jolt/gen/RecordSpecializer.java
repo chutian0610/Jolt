@@ -1,5 +1,6 @@
 package io.github.chutian0610.jolt.gen;
 
+import io.github.chutian0610.jolt.JoltParser;
 import io.github.chutian0610.jolt.JoltWriter;
 import io.github.chutian0610.jolt.bind.BindConfig;
 import io.github.chutian0610.jolt.bind.TypedBinder;
@@ -16,13 +17,22 @@ import net.bytebuddy.jar.asm.Type;
 
 import java.lang.reflect.Method;
 
+import static io.github.chutian0610.jolt.gen.Emit.BIND_EXCEPTION;
 import static io.github.chutian0610.jolt.gen.Emit.BIND_INTERNAL;
 import static io.github.chutian0610.jolt.gen.Emit.CHILD_FIELD_PREFIX;
+import static io.github.chutian0610.jolt.gen.Emit.DIRECT_SUPPORT;
 import static io.github.chutian0610.jolt.gen.Emit.NODE;
 import static io.github.chutian0610.jolt.gen.Emit.NODE_GET_DESC;
 import static io.github.chutian0610.jolt.gen.Emit.NODE_TYPE_DESC;
+import static io.github.chutian0610.jolt.gen.Emit.PARSER;
+import static io.github.chutian0610.jolt.gen.Emit.PARSER_BIG_DECIMAL_DESC;
+import static io.github.chutian0610.jolt.gen.Emit.PARSER_FIELD_NAME_EQUALS_DESC;
+import static io.github.chutian0610.jolt.gen.Emit.PARSER_NEXT_TOKEN_DESC;
+import static io.github.chutian0610.jolt.gen.Emit.PARSER_TEXT_VALUE_DESC;
 import static io.github.chutian0610.jolt.gen.Emit.TAG_DESC;
 import static io.github.chutian0610.jolt.gen.Emit.TAG_INTERNAL;
+import static io.github.chutian0610.jolt.gen.Emit.TOKEN_DESC;
+import static io.github.chutian0610.jolt.gen.Emit.TOKEN_INTERNAL;
 import static io.github.chutian0610.jolt.gen.Emit.TO_VALUE_DESC;
 import static io.github.chutian0610.jolt.gen.Emit.TYPED_BINDER_FIELD_DESC;
 import static io.github.chutian0610.jolt.gen.Emit.TYPE_FIELD_PREFIX;
@@ -61,16 +71,49 @@ final class RecordSpecializer {
     static final String NAME_SET_FIELD = "jolt$nameSet";
     static final String HANDLE_FIELD = "jolt$handle";
     static final String INIT_CHILDREN_METHOD = "jolt$initChildren";
+    static final String NAMES_FIELD = "jolt$names";
+    static final String PRIMITIVES_FIELD = "jolt$primitives";
+    static final String SIMPLE_NAMES_FIELD = "jolt$simpleNames";
+    static final String PARSE_TOKENS_METHOD = "parseTokens";
+    static final String HAS_DIRECT_READ_METHOD = "hasDirectRead";
 
     private RecordSpecializer() {}
+
+    /**
+     * The M7-T1 direct-read capability: every component an inline strict scalar (String,
+     * boolean, the numeric widths) — the tracer scope. Nested records/POJOs, enums, and
+     * collections join with the spectrum tickets; until then a non-capable record declares
+     * no {@code parseTokens} at all, so the facade's direct dispatch keeps the reflective
+     * direct binder (a registry hit without a direct read is the documented miss arm).
+     */
+    static boolean isDirectCapable(GenPlan<?> plan) {
+        if (!plan.isRecord
+                || !java.lang.reflect.Modifier.isPublic(plan.type.getModifiers())) {
+            return false;
+        }
+        for (java.lang.reflect.Type genericType : plan.genericTypes) {
+            Emit.Kind kind = kindOf(rawOf(genericType));
+            if (kind != Emit.Kind.STRING && kind != Emit.Kind.BOOLEAN
+                    && kind != Emit.Kind.NUMBER) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     /** Adds the specialized fields and straight-line overrides to the generated class. */
     static DynamicType.Builder<?> apply(DynamicType.Builder<?> builder, String generatedName,
                                         GenPlan<?> plan) {
         String self = generatedName.replace('.', '/');
+        boolean direct = isDirectCapable(plan);
         builder = builder.defineField(NAME_SET_FIELD, java.util.Set.class, Visibility.PUBLIC);
         builder = builder.defineField(HANDLE_FIELD, java.lang.invoke.MethodHandle.class,
                 Visibility.PUBLIC);
+        if (direct) {
+            builder = builder.defineField(NAMES_FIELD, String[].class, Visibility.PUBLIC);
+            builder = builder.defineField(PRIMITIVES_FIELD, boolean[].class, Visibility.PUBLIC);
+            builder = builder.defineField(SIMPLE_NAMES_FIELD, String[].class, Visibility.PUBLIC);
+        }
         for (int i = 0; i < plan.names.length; i++) {
             Class<?> raw = rawOf(plan.genericTypes[i]);
             switch (kindOf(raw)) {
@@ -81,7 +124,7 @@ final class RecordSpecializer {
                 default -> { /* scalars bake no fields */ }
             }
         }
-        return builder
+        builder = builder
                 .defineMethod("parse", Object.class, Visibility.PUBLIC)
                 .withParameters(Node.class, String.class, BindConfig.class)
                 .intercept(new Implementation.Simple(new ParseBody(self, plan)))
@@ -96,6 +139,22 @@ final class RecordSpecializer {
                 .intercept(new Implementation.Simple(new CheckUnknownBody(self)))
                 .defineMethod(INIT_CHILDREN_METHOD, void.class, Visibility.PUBLIC)
                 .intercept(new Implementation.Simple(new InitChildrenBody(self, plan)));
+        if (direct) {
+            // the third form: the token-consuming direct read, plus the capability flag the
+            // facade's withDirect dispatch consults
+            builder = builder
+                    .defineMethod(PARSE_TOKENS_METHOD, Object.class, Visibility.PUBLIC)
+                    .withParameters(JoltParser.class, BindConfig.class)
+                    .intercept(new Implementation.Simple(new ParseTokensBody(self, plan)))
+                    .defineMethod(HAS_DIRECT_READ_METHOD, boolean.class, Visibility.PUBLIC)
+                    .intercept(new Implementation.Simple(
+                            (mv, context, method) -> {
+                                mv.visitInsn(Opcodes.ICONST_1);
+                                mv.visitInsn(Opcodes.IRETURN);
+                                return new ByteCodeAppender.Size(1, 0);
+                            }));
+        }
+        return builder;
     }
 
     /**
@@ -107,6 +166,20 @@ final class RecordSpecializer {
         try {
             field(binder, NAME_SET_FIELD).set(binder, plan.nameSet);
             field(binder, HANDLE_FIELD).set(binder, plan.constructorHandle);
+            if (isDirectCapable(plan)) {
+                // the generated direct read's sweep data — names, primitives, simple names
+                String[] names = plan.names.clone();
+                boolean[] primitives = new boolean[names.length];
+                String[] simpleNames = new String[names.length];
+                for (int i = 0; i < names.length; i++) {
+                    Class<?> raw = rawOf(plan.genericTypes[i]);
+                    primitives[i] = raw.isPrimitive();
+                    simpleNames[i] = raw.getSimpleName();
+                }
+                field(binder, NAMES_FIELD).set(binder, names);
+                field(binder, PRIMITIVES_FIELD).set(binder, primitives);
+                field(binder, SIMPLE_NAMES_FIELD).set(binder, simpleNames);
+            }
             for (int i = 0; i < plan.names.length; i++) {
                 if (kindOf(rawOf(plan.genericTypes[i])) == Emit.Kind.GENERIC) {
                     field(binder, TYPE_FIELD_PREFIX + i).set(binder, plan.genericTypes[i]);
@@ -421,6 +494,611 @@ final class RecordSpecializer {
             mv.visitVarInsn(Opcodes.ALOAD, 3);
             mv.visitMethodInsn(Opcodes.INVOKESTATIC, BIND_INTERNAL, "toValue", TO_VALUE_DESC, false);
             mv.visitInsn(Opcodes.AASTORE);
+        }
+    }
+
+    /**
+     * The M7 generated direct read — the generated class's token-consuming form. The field
+     * loop runs inline ({@code fieldNameEquals} matching against the baked name constants),
+     * strict scalars read through the shared {@code DirectSupport} helpers (the reflective
+     * direct binder's own error semantics — messages, paths, and the declaration-order sweep
+     * cannot drift between the grades), and construction is DIRECT: component values live in
+     * typed locals (primitives unboxed) and the canonical constructor takes them as
+     * stack-passed parameters — no arguments array, no boxing bridge.
+     *
+     * <p>Every branch target carries an explicit stack-map frame; ALL locals are
+     * default-initialized up front (component slots included), so every frame declares the
+     * same locals array. Locals: 0 this | 1 parser | 2 config | 3 seen | 4 errors
+     * | 5 unknownKey | 6 token | 7 valueToken | 8 throwable | 9 result | 10… per-component
+     * typed slots (primitive long/double take two). The drain gate reads the loop-exit
+     * token: END_OBJECT there means the root was an object (only that path reaches the exit
+     * through the field loop) — the reflective arm returns a non-object-root read without
+     * draining, and this body mirrors that token for token.
+     */
+    private static final class ParseTokensBody implements ByteCodeAppender {
+
+        private static final int SEEN = 3;
+        private static final int ERRORS = 4;
+        private static final int UNKNOWN = 5;
+        private static final int TOKEN = 6;
+        private static final int VALUE_TOKEN = 7;
+        private static final int THROWABLE = 8;
+        private static final int RESULT = 9;
+        private static final int FIRST_COMPONENT = 10;
+
+        private final String self;
+        private final GenPlan<?> plan;
+        private final String recordInternal;
+        private final boolean hasPrimitives;
+
+        ParseTokensBody(String self, GenPlan<?> plan) {
+            this.self = self;
+            this.plan = plan;
+            this.recordInternal = internal(plan.type);
+            boolean any = false;
+            for (java.lang.reflect.Type genericType : plan.genericTypes) {
+                any |= rawOf(genericType).isPrimitive();
+            }
+            this.hasPrimitives = any;
+        }
+
+        /** One local for most values; primitive long/double take two (boxed widths are refs). */
+        private static int slotWidth(Class<?> raw) {
+            return raw == long.class || raw == double.class ? 2 : 1;
+        }
+
+        private int slotOf(int component) {
+            int slot = FIRST_COMPONENT;
+            for (int i = 0; i < component; i++) {
+                slot += slotWidth(rawOf(plan.genericTypes[i]));
+            }
+            return slot;
+        }
+
+        private int maxLocals() {
+            return slotOf(plan.names.length);
+        }
+
+        /** The FrameTracker declaration for a component value's local slot. */
+        private static Object frameType(Class<?> raw) {
+            if (raw == boolean.class || raw == byte.class || raw == short.class
+                    || raw == int.class) {
+                return Opcodes.INTEGER;
+            }
+            if (raw == long.class) {
+                return Opcodes.LONG;
+            }
+            if (raw == float.class) {
+                return Opcodes.FLOAT;
+            }
+            if (raw == double.class) {
+                return Opcodes.DOUBLE;
+            }
+            return internal(raw);
+        }
+
+        @Override
+        public Size apply(MethodVisitor mv, Implementation.Context context,
+                          MethodDescription instrumentedMethod) {
+            int n = plan.names.length;
+            // the frame's locals declaration, COMPACT — one cell per value (ASM fills the
+            // second slot of a LONG/DOUBLE cell itself; an explicit TOP there would shift
+            // every later cell and corrupt the serialized StackMapTable)
+            Object[] frameLocals = new Object[FIRST_COMPONENT + n];
+            frameLocals[1] = PARSER;
+            frameLocals[2] = internal(BindConfig.class);
+            frameLocals[SEEN] = "[Z";
+            frameLocals[ERRORS] = "[Ljava/lang/Object;";
+            frameLocals[UNKNOWN] = "java/lang/String";
+            frameLocals[TOKEN] = TOKEN_INTERNAL;
+            frameLocals[VALUE_TOKEN] = TOKEN_INTERNAL;
+            frameLocals[THROWABLE] = "java/lang/Throwable";
+            frameLocals[RESULT] = recordInternal;
+            for (int i = 0; i < n; i++) {
+                frameLocals[FIRST_COMPONENT + i] = frameType(rawOf(plan.genericTypes[i]));
+            }
+            Emit.FrameTracker slots = new Emit.FrameTracker(self, frameLocals);
+
+            Label loopHead = new Label();
+            Label sweep = new Label();
+            Label drainHead = new Label();
+            Label drained = new Label();
+
+            // entry: reset the shared path, zero the pooled seen flags, default every slot
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetPath", "()V", false);
+            pushIndex(mv, n);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "takeSeen", "(I)[Z", false);
+            mv.visitVarInsn(Opcodes.ASTORE, SEEN);
+            mv.visitVarInsn(Opcodes.ALOAD, SEEN);
+            mv.visitInsn(Opcodes.ICONST_0);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/util/Arrays", "fill", "([ZZ)V", false);
+            nullStore(mv, ERRORS);
+            nullStore(mv, UNKNOWN);
+            nullStore(mv, TOKEN);
+            nullStore(mv, VALUE_TOKEN);
+            nullStore(mv, THROWABLE);
+            nullStore(mv, RESULT);
+            for (int i = 0; i < n; i++) {
+                defaultStore(mv, slotOf(i), rawOf(plan.genericTypes[i]));
+            }
+
+            // root dispatch: a non-object document goes straight to the sweep — the first
+            // missing primitive raises there; an all-reference record raises its own marker
+            // (the reflective arm's spectrum-ticket shape)
+            mv.visitVarInsn(Opcodes.ALOAD, 1);
+            mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
+                    PARSER_NEXT_TOKEN_DESC, true);
+            mv.visitVarInsn(Opcodes.ASTORE, TOKEN);
+            mv.visitVarInsn(Opcodes.ALOAD, TOKEN);
+            mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "START_OBJECT", TOKEN_DESC);
+            mv.visitJumpInsn(Opcodes.IF_ACMPEQ, loopHead);
+            if (hasPrimitives) {
+                mv.visitJumpInsn(Opcodes.GOTO, sweep);
+            } else {
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "nonObjectRecordRoot",
+                        "()Ljava/lang/RuntimeException;", false);
+                mv.visitInsn(Opcodes.ATHROW);
+            }
+
+            // the field loop
+            mv.visitLabel(loopHead);
+            slots.emit(mv);
+            mv.visitVarInsn(Opcodes.ALOAD, 1);
+            mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
+                    PARSER_NEXT_TOKEN_DESC, true);
+            mv.visitVarInsn(Opcodes.ASTORE, TOKEN);
+            mv.visitVarInsn(Opcodes.ALOAD, TOKEN);
+            mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "END_OBJECT", TOKEN_DESC);
+            mv.visitJumpInsn(Opcodes.IF_ACMPEQ, sweep);
+
+            // the inline match chain: fieldNameEquals against the baked name constants
+            Label[] matched = new Label[n];
+            for (int i = 0; i < n; i++) {
+                matched[i] = new Label();
+                mv.visitVarInsn(Opcodes.ALOAD, 1);
+                mv.visitLdcInsn(plan.names[i]);
+                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
+                        PARSER_FIELD_NAME_EQUALS_DESC, true);
+                mv.visitJumpInsn(Opcodes.IFNE, matched[i]);
+            }
+            // unknown field: note (strict mode) + skip, one shared call
+            mv.visitVarInsn(Opcodes.ALOAD, 1);
+            mv.visitVarInsn(Opcodes.ALOAD, 2);
+            mv.visitVarInsn(Opcodes.ALOAD, UNKNOWN);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "skipOrNoteUnknown",
+                    "(Lio/github/chutian0610/jolt/JoltParser;"
+                            + "Lio/github/chutian0610/jolt/bind/BindConfig;"
+                            + "Ljava/lang/String;)Ljava/lang/String;", false);
+            mv.visitVarInsn(Opcodes.ASTORE, UNKNOWN);
+            mv.visitJumpInsn(Opcodes.GOTO, loopHead);
+
+            for (int i = 0; i < n; i++) {
+                emitComponent(mv, slots, i, matched[i], n, loopHead);
+            }
+
+            // the declaration-order sweep through the shared helper (the baked arrays)
+            mv.visitLabel(sweep);
+            slots.emit(mv);
+            mv.visitVarInsn(Opcodes.ALOAD, ERRORS);
+            mv.visitVarInsn(Opcodes.ALOAD, SEEN);
+            mv.visitVarInsn(Opcodes.ALOAD, UNKNOWN);
+            mv.visitVarInsn(Opcodes.ALOAD, 0);
+            mv.visitFieldInsn(Opcodes.GETFIELD, self, NAMES_FIELD, "[Ljava/lang/String;");
+            mv.visitVarInsn(Opcodes.ALOAD, 0);
+            mv.visitFieldInsn(Opcodes.GETFIELD, self, PRIMITIVES_FIELD, "[Z");
+            mv.visitVarInsn(Opcodes.ALOAD, 0);
+            mv.visitFieldInsn(Opcodes.GETFIELD, self, SIMPLE_NAMES_FIELD, "[Ljava/lang/String;");
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "sweepRecordErrors",
+                    "([Ljava/lang/Object;[ZLjava/lang/String;[Ljava/lang/String;"
+                            + "[Z[Ljava/lang/String;)V", false);
+            // the seen flags are dead past the sweep — back to the thread's pool (error
+            // exits leak the array to the GC: the failure path may allocate, ADR-0005)
+            mv.visitVarInsn(Opcodes.ALOAD, SEEN);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "returnSeen",
+                    "([Z)V", false);
+
+            // DIRECT construction: NEW + per-parameter stack passing (typed loads,
+            // primitives unboxed) + INVOKESPECIAL canonical
+            Label constructStart = new Label();
+            Label constructEnd = new Label();
+            Label rejected = new Label();
+            mv.visitTryCatchBlock(constructStart, constructEnd, rejected, "java/lang/Throwable");
+            mv.visitLabel(constructStart);
+            mv.visitTypeInsn(Opcodes.NEW, recordInternal);
+            mv.visitInsn(Opcodes.DUP);
+            for (int i = 0; i < n; i++) {
+                emitLoad(mv, slotOf(i), rawOf(plan.genericTypes[i]));
+            }
+            mv.visitMethodInsn(Opcodes.INVOKESPECIAL, recordInternal, "<init>",
+                    Type.getConstructorDescriptor(plan.constructor), false);
+            mv.visitLabel(constructEnd);
+            mv.visitVarInsn(Opcodes.ASTORE, RESULT);
+
+            // the drain runs exactly when the root was an object: the loop-exit token in
+            // slot 6 is END_OBJECT only on that path (a non-object root leaves its own
+            // token there and returns without draining — the reflective arm's shape);
+            // parser syntax errors in the tail surface unchanged
+            mv.visitVarInsn(Opcodes.ALOAD, TOKEN);
+            mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "END_OBJECT", TOKEN_DESC);
+            mv.visitJumpInsn(Opcodes.IF_ACMPEQ, drainHead);
+            mv.visitVarInsn(Opcodes.ALOAD, RESULT);
+            mv.visitInsn(Opcodes.ARETURN);
+
+            mv.visitLabel(drainHead);
+            slots.emit(mv);
+            mv.visitVarInsn(Opcodes.ALOAD, 1);
+            mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
+                    PARSER_NEXT_TOKEN_DESC, true);
+            mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "EOF", TOKEN_DESC);
+            mv.visitJumpInsn(Opcodes.IF_ACMPEQ, drained);
+            mv.visitJumpInsn(Opcodes.GOTO, drainHead);
+
+            mv.visitLabel(drained);
+            slots.emit(mv);
+            mv.visitVarInsn(Opcodes.ALOAD, RESULT);
+            mv.visitInsn(Opcodes.ARETURN);
+
+            mv.visitLabel(rejected);
+            slots.emit(mv, "java/lang/Throwable");
+            mv.visitVarInsn(Opcodes.ASTORE, THROWABLE);
+            mv.visitVarInsn(Opcodes.ALOAD, THROWABLE);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "constructorRejected",
+                    "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;", false);
+            mv.visitInsn(Opcodes.ATHROW);
+
+            // maxStack: the floor covers the integral bound dance (two longs + the raise)
+            // and the dispatch/drain; construction pushes NEW+DUP plus every component value
+            int widths = 0;
+            for (int i = 0; i < n; i++) {
+                widths += slotWidth(rawOf(plan.genericTypes[i]));
+            }
+            return new Size(Math.max(10, 2 + widths), maxLocals());
+        }
+
+        /** One matched component: seen flag, path push, the guarded read, the shared slot
+         * note on failure, the path pop — then back to the field loop. */
+        private void emitComponent(MethodVisitor mv, Emit.FrameTracker slots, int i,
+                                   Label matched, int n, Label loopHead) {
+            Class<?> raw = rawOf(plan.genericTypes[i]);
+            int slot = slotOf(i);
+            mv.visitLabel(matched);
+            slots.emit(mv);
+
+            Label tryStart = new Label();
+            Label tryEnd = new Label();
+            Label join = new Label();
+            Label handler = new Label();
+            mv.visitVarInsn(Opcodes.ALOAD, SEEN);
+            pushIndex(mv, i);
+            mv.visitInsn(Opcodes.ICONST_1);
+            mv.visitInsn(Opcodes.BASTORE);
+            mv.visitLdcInsn(plan.names[i]);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
+                    "(Ljava/lang/String;)V", false);
+            mv.visitVarInsn(Opcodes.ALOAD, 1);
+            mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
+                    PARSER_NEXT_TOKEN_DESC, true);
+            mv.visitVarInsn(Opcodes.ASTORE, VALUE_TOKEN);
+
+            mv.visitTryCatchBlock(tryStart, tryEnd, handler, BIND_EXCEPTION);
+            mv.visitLabel(tryStart);
+            emitRead(mv, slots, i, raw, slot, join, tryEnd);
+            mv.visitLabel(tryEnd);
+            slots.emit(mv);
+            mv.visitJumpInsn(Opcodes.GOTO, join);
+            mv.visitLabel(handler);
+            slots.emit(mv, BIND_EXCEPTION);
+            mv.visitVarInsn(Opcodes.ASTORE, THROWABLE);
+            mv.visitVarInsn(Opcodes.ALOAD, ERRORS);
+            pushIndex(mv, i);
+            mv.visitVarInsn(Opcodes.ALOAD, THROWABLE);
+            pushIndex(mv, n);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "noteError",
+                    "([Ljava/lang/Object;ILio/github/chutian0610/jolt/bind/JsonBindException;"
+                            + "I)[Ljava/lang/Object;", false);
+            mv.visitVarInsn(Opcodes.ASTORE, ERRORS);
+
+            mv.visitLabel(join);
+            slots.emit(mv);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop", "()V", false);
+            mv.visitJumpInsn(Opcodes.GOTO, loopHead);
+        }
+
+        /**
+         * The inline strict read for one scalar component, mirroring the reflective readValue
+         * gate by gate: the JSON-null gate first (primitives raise the shared message,
+         * references bind null), then the tag gate and the value read through the shared
+         * helpers. The value lands in the component's typed local; every non-throwing path
+         * ends at {@code tryEnd}, the null-pass edge for references jumps the shared
+         * {@code join}.
+         */
+        private void emitRead(MethodVisitor mv, Emit.FrameTracker slots, int i, Class<?> raw,
+                              int slot, Label join, Label tryEnd) {
+            String simpleName = raw.getSimpleName();
+            boolean primitive = raw.isPrimitive();
+            Label nullEdge = new Label();
+            mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
+            mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "VALUE_NULL", TOKEN_DESC);
+            mv.visitJumpInsn(Opcodes.IF_ACMPEQ, nullEdge);
+            switch (kindOf(raw)) {
+                case STRING -> {
+                    requireToken(mv, slots, "VALUE_STRING", "a string");
+                    mv.visitVarInsn(Opcodes.ALOAD, 1);
+                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "textValue",
+                            PARSER_TEXT_VALUE_DESC, true);
+                    mv.visitVarInsn(Opcodes.ASTORE, slot);
+                    mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
+                }
+                case BOOLEAN -> {
+                    Label trueEdge = new Label();
+                    Label falseEdge = new Label();
+                    mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
+                    mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "VALUE_TRUE", TOKEN_DESC);
+                    mv.visitJumpInsn(Opcodes.IF_ACMPEQ, trueEdge);
+                    mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
+                    mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "VALUE_FALSE", TOKEN_DESC);
+                    mv.visitJumpInsn(Opcodes.IF_ACMPEQ, falseEdge);
+                    raiseTagError(mv, "a boolean");
+                    mv.visitLabel(trueEdge);
+                    slots.emit(mv);
+                    if (primitive) {
+                        mv.visitInsn(Opcodes.ICONST_1);
+                        mv.visitVarInsn(Opcodes.ISTORE, slot);
+                    } else {
+                        mv.visitFieldInsn(Opcodes.GETSTATIC, "java/lang/Boolean", "TRUE",
+                                "Ljava/lang/Boolean;");
+                        mv.visitVarInsn(Opcodes.ASTORE, slot);
+                    }
+                    mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
+                    mv.visitLabel(falseEdge);
+                    slots.emit(mv);
+                    if (primitive) {
+                        mv.visitInsn(Opcodes.ICONST_0);
+                        mv.visitVarInsn(Opcodes.ISTORE, slot);
+                    } else {
+                        mv.visitFieldInsn(Opcodes.GETSTATIC, "java/lang/Boolean", "FALSE",
+                                "Ljava/lang/Boolean;");
+                        mv.visitVarInsn(Opcodes.ASTORE, slot);
+                    }
+                    mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
+                }
+                case NUMBER -> emitNumberRead(mv, slots, raw, simpleName, slot, tryEnd);
+                default -> throw new IllegalStateException(
+                        "component " + plan.names[i] + " is not a direct scalar");
+            }
+
+            mv.visitLabel(nullEdge);
+            slots.emit(mv);
+            if (primitive) {
+                mv.visitLdcInsn(simpleName);
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "nullForPrimitive",
+                        "(Ljava/lang/String;)Ljava/lang/RuntimeException;", false);
+                mv.visitInsn(Opcodes.ATHROW);
+            } else {
+                mv.visitJumpInsn(Opcodes.GOTO, join);
+            }
+        }
+
+        /** The tag gate: the token must carry the expected tag, else the shared rejection. */
+        private void requireToken(MethodVisitor mv, Emit.FrameTracker slots, String constant,
+                                  String wanted) {
+            Label ok = new Label();
+            mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
+            mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, constant, TOKEN_DESC);
+            mv.visitJumpInsn(Opcodes.IF_ACMPEQ, ok);
+            raiseTagError(mv, wanted);
+            mv.visitLabel(ok);
+            slots.emit(mv);
+        }
+
+        /** parser/token/wanted onto the shared tagError, then the throw. */
+        private void raiseTagError(MethodVisitor mv, String wanted) {
+            mv.visitVarInsn(Opcodes.ALOAD, 1);
+            mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
+            mv.visitLdcInsn(wanted);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "tagError",
+                    "(Lio/github/chutian0610/jolt/JoltParser;"
+                            + "Lio/github/chutian0610/jolt/Token;"
+                            + "Ljava/lang/String;)Ljava/lang/RuntimeException;", false);
+            mv.visitInsn(Opcodes.ATHROW);
+        }
+
+        /** The numeric family: shared long read + the all-stack bound dance (the M5
+         * discipline — each throw edge declares the stack ITS edge leaves), the decimal
+         * reads through requireNumber + bigDecimalValue, and the BigInteger exactness
+         * handler. */
+        private void emitNumberRead(MethodVisitor mv, Emit.FrameTracker slots, Class<?> raw,
+                                    String simpleName, int slot, Label tryEnd) {
+            if (raw != byte.class && raw != short.class && raw != int.class
+                    && raw != long.class && raw != Byte.class && raw != Short.class
+                    && raw != Integer.class && raw != Long.class) {
+                // the decimal family shares the requireNumber + bigDecimalValue prefix
+                mv.visitVarInsn(Opcodes.ALOAD, 1);
+                mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "requireNumber",
+                        "(Lio/github/chutian0610/jolt/JoltParser;"
+                                + "Lio/github/chutian0610/jolt/Token;)V", false);
+                mv.visitVarInsn(Opcodes.ALOAD, 1);
+                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "bigDecimalValue",
+                        PARSER_BIG_DECIMAL_DESC, true);
+            }
+            switch (raw.getName()) {
+                case "float", "java.lang.Float" -> {
+                    mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/math/BigDecimal",
+                            "floatValue", "()F", false);
+                    if (raw == float.class) {
+                        mv.visitVarInsn(Opcodes.FSTORE, slot);
+                    } else {
+                        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Float", "valueOf",
+                                "(F)Ljava/lang/Float;", false);
+                        mv.visitVarInsn(Opcodes.ASTORE, slot);
+                    }
+                    mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
+                }
+                case "double", "java.lang.Double" -> {
+                    mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/math/BigDecimal",
+                            "doubleValue", "()D", false);
+                    if (raw == double.class) {
+                        mv.visitVarInsn(Opcodes.DSTORE, slot);
+                    } else {
+                        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Double", "valueOf",
+                                "(D)Ljava/lang/Double;", false);
+                        mv.visitVarInsn(Opcodes.ASTORE, slot);
+                    }
+                    mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
+                }
+                case "java.math.BigDecimal" -> {
+                    mv.visitVarInsn(Opcodes.ASTORE, slot);
+                    mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
+                }
+                case "java.math.BigInteger" -> {
+                    Label tryStart = new Label();
+                    Label exact = new Label();
+                    Label lossy = new Label();
+                    mv.visitTryCatchBlock(tryStart, exact, lossy,
+                            "java/lang/ArithmeticException");
+                    mv.visitLabel(tryStart);
+                    mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/math/BigDecimal",
+                            "toBigIntegerExact", "()Ljava/math/BigInteger;", false);
+                    mv.visitLabel(exact);
+                    mv.visitVarInsn(Opcodes.ASTORE, slot);
+                    mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
+                    mv.visitLabel(lossy);
+                    slots.emit(mv, "java/lang/ArithmeticException");
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "notWholeNumber",
+                            "()Ljava/lang/RuntimeException;", false);
+                    mv.visitInsn(Opcodes.ATHROW);
+                }
+                default -> emitIntegralRead(mv, slots, raw, simpleName, slot, tryEnd);
+            }
+        }
+
+        /** byte/short/int/long: the shared checked long read, then the M5 all-stack bound
+         * dance (no long locals — the two throw edges declare their own stack depths). */
+        private void emitIntegralRead(MethodVisitor mv, Emit.FrameTracker slots, Class<?> raw,
+                                      String simpleName, int slot, Label tryEnd) {
+            mv.visitVarInsn(Opcodes.ALOAD, 1);
+            mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "readLongChecked",
+                    "(Lio/github/chutian0610/jolt/JoltParser;"
+                            + "Lio/github/chutian0610/jolt/Token;)J", false);
+            long bound = switch (raw.getName()) {
+                case "byte", "java.lang.Byte" -> Byte.MAX_VALUE;
+                case "short", "java.lang.Short" -> Short.MAX_VALUE;
+                case "int", "java.lang.Integer" -> Integer.MAX_VALUE;
+                default -> Long.MAX_VALUE;
+            };
+            if (bound == Long.MAX_VALUE) {
+                if (raw == long.class) {
+                    mv.visitVarInsn(Opcodes.LSTORE, slot);
+                } else {
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Long", "valueOf",
+                            "(J)Ljava/lang/Long;", false);
+                    mv.visitVarInsn(Opcodes.ASTORE, slot);
+                }
+                mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
+                return;
+            }
+            Label overFirst = new Label();
+            Label overSecond = new Label();
+            Label inRange = new Label();
+            // stack: [v] — three copies while comparing; each throw edge declares the stack
+            // ITS edge leaves (first: two longs, second: one)
+            mv.visitInsn(Opcodes.DUP2);
+            mv.visitInsn(Opcodes.DUP2);
+            mv.visitLdcInsn(bound);
+            mv.visitInsn(Opcodes.LCMP);
+            mv.visitJumpInsn(Opcodes.IFGT, overFirst);
+            mv.visitLdcInsn(-bound - 1);
+            mv.visitInsn(Opcodes.LCMP);
+            mv.visitJumpInsn(Opcodes.IFLT, overSecond);
+            mv.visitJumpInsn(Opcodes.GOTO, inRange);
+            mv.visitLabel(overFirst);
+            slots.emit(mv, Opcodes.LONG, Opcodes.LONG);
+            mv.visitLdcInsn(simpleName);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "boundError",
+                    "(Ljava/lang/String;)Ljava/lang/RuntimeException;", false);
+            mv.visitInsn(Opcodes.ATHROW);
+            mv.visitLabel(overSecond);
+            slots.emit(mv, Opcodes.LONG);
+            mv.visitLdcInsn(simpleName);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "boundError",
+                    "(Ljava/lang/String;)Ljava/lang/RuntimeException;", false);
+            mv.visitInsn(Opcodes.ATHROW);
+            mv.visitLabel(inRange);
+            slots.emit(mv, Opcodes.LONG);
+            mv.visitInsn(Opcodes.L2I);
+            switch (raw.getName()) {
+                case "byte", "java.lang.Byte" -> {
+                    mv.visitInsn(Opcodes.I2B);
+                    if (raw == byte.class) {
+                        mv.visitVarInsn(Opcodes.ISTORE, slot);
+                    } else {
+                        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Byte", "valueOf",
+                                "(B)Ljava/lang/Byte;", false);
+                        mv.visitVarInsn(Opcodes.ASTORE, slot);
+                    }
+                }
+                case "short", "java.lang.Short" -> {
+                    mv.visitInsn(Opcodes.I2S);
+                    if (raw == short.class) {
+                        mv.visitVarInsn(Opcodes.ISTORE, slot);
+                    } else {
+                        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Short", "valueOf",
+                                "(S)Ljava/lang/Short;", false);
+                        mv.visitVarInsn(Opcodes.ASTORE, slot);
+                    }
+                }
+                default -> {
+                    if (raw == int.class) {
+                        mv.visitVarInsn(Opcodes.ISTORE, slot);
+                    } else {
+                        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Integer", "valueOf",
+                                "(I)Ljava/lang/Integer;", false);
+                        mv.visitVarInsn(Opcodes.ASTORE, slot);
+                    }
+                }
+            }
+            mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
+        }
+
+        private static void nullStore(MethodVisitor mv, int slot) {
+            mv.visitInsn(Opcodes.ACONST_NULL);
+            mv.visitVarInsn(Opcodes.ASTORE, slot);
+        }
+
+        private static void defaultStore(MethodVisitor mv, int slot, Class<?> raw) {
+            if (raw == boolean.class || raw == byte.class || raw == short.class
+                    || raw == int.class) {
+                mv.visitInsn(Opcodes.ICONST_0);
+                mv.visitVarInsn(Opcodes.ISTORE, slot);
+            } else if (raw == long.class) {
+                mv.visitInsn(Opcodes.LCONST_0);
+                mv.visitVarInsn(Opcodes.LSTORE, slot);
+            } else if (raw == float.class) {
+                mv.visitInsn(Opcodes.FCONST_0);
+                mv.visitVarInsn(Opcodes.FSTORE, slot);
+            } else if (raw == double.class) {
+                mv.visitInsn(Opcodes.DCONST_0);
+                mv.visitVarInsn(Opcodes.DSTORE, slot);
+            } else {
+                nullStore(mv, slot);
+            }
+        }
+
+        private static void emitLoad(MethodVisitor mv, int slot, Class<?> raw) {
+            if (raw == boolean.class || raw == byte.class || raw == short.class
+                    || raw == int.class) {
+                mv.visitVarInsn(Opcodes.ILOAD, slot);
+            } else if (raw == long.class) {
+                mv.visitVarInsn(Opcodes.LLOAD, slot);
+            } else if (raw == float.class) {
+                mv.visitVarInsn(Opcodes.FLOAD, slot);
+            } else if (raw == double.class) {
+                mv.visitVarInsn(Opcodes.DLOAD, slot);
+            } else {
+                mv.visitVarInsn(Opcodes.ALOAD, slot);
+            }
         }
     }
 

@@ -40,6 +40,14 @@ final class Emit {
     static final String BUILDER_TOSTRING_DESC = "()Ljava/lang/String;";
     static final String TYPED_BINDER_FIELD_DESC = "Lio/github/chutian0610/jolt/bind/TypedBinder;";
     static final String GENERATED_INTERNAL = internal(GeneratedBinders.class);
+    static final String DIRECT_SUPPORT = internal(io.github.chutian0610.jolt.bind.DirectSupport.class);
+    static final String PARSER = internal(io.github.chutian0610.jolt.JoltParser.class);
+    static final String TOKEN_INTERNAL = internal(io.github.chutian0610.jolt.Token.class);
+    static final String TOKEN_DESC = "L" + TOKEN_INTERNAL + ";";
+    static final String PARSER_NEXT_TOKEN_DESC = "()Lio/github/chutian0610/jolt/Token;";
+    static final String PARSER_FIELD_NAME_EQUALS_DESC = "(Ljava/lang/String;)Z";
+    static final String PARSER_TEXT_VALUE_DESC = "()Ljava/lang/String;";
+    static final String PARSER_BIG_DECIMAL_DESC = "()Ljava/math/BigDecimal;";
 
     static final String CHILD_FIELD_PREFIX = "jolt$child$";
     static final String TYPE_FIELD_PREFIX = "jolt$type$";
@@ -388,6 +396,13 @@ final class Emit {
             slots[0] = self;
             // ASM's frame API requires explicit TOP markers for undefined slots (null breaks it)
             java.util.Arrays.fill(slots, 1, size, Opcodes.TOP);
+        }
+
+        /** Pre-built COMPACT locals declaration — one cell per value; a LONG/DOUBLE cell
+         * occupies one array cell (ASM writes its second slot itself). */
+        FrameTracker(String self, Object[] compactLocals) {
+            compactLocals[0] = self;
+            slots = compactLocals;
         }
 
         void set(int slot, Object type) {
