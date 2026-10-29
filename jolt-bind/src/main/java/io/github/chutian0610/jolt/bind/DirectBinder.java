@@ -37,13 +37,91 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
     private enum Shape { RECORD, POJO }
 
+    private static final Plan NATURAL_PLAN = new Plan.PNatural();
+
+    /**
+     * The per-component read plan, resolved ONCE at construction: generic-type reflection
+     * (getActualTypeArguments and friends) allocates per call, so the hot path sees only
+     * the resolved plan. Unsupported shapes (polymorphic targets, exotic generics) carry
+     * their rejection message here and raise it at the value's path, runtime-time, exactly
+     * when the tree path would.
+     */
+    private sealed interface Plan {
+        record PScalar(Class<?> raw, boolean primitive, String simpleName) implements Plan {}
+        record PEnum(Class<?> raw) implements Plan {}
+        record PList(Plan element) implements Plan {}
+        record PMap(Plan value, String keyTypeName, boolean stringKeys) implements Plan {}
+        record PArray(Plan component, Class<?> raw) implements Plan {}
+        record PRecord(java.lang.Class<?> raw) implements Plan {}
+        record PPojo(java.lang.Class<?> raw) implements Plan {}
+        record PNatural() implements Plan {}
+        record PUnsupported(String message) implements Plan {}
+    }
+
+    private static Plan planOf(java.lang.reflect.Type target) {
+        if (target instanceof java.lang.reflect.ParameterizedType parameterized) {
+            Class<?> raw = (Class<?>) parameterized.getRawType();
+            java.lang.reflect.Type[] args = parameterized.getActualTypeArguments();
+            if (raw == List.class) {
+                return new Plan.PList(planOf(args[0]));
+            }
+            if (raw == Map.class) {
+                return new Plan.PMap(planOf(args[1]), args[0].getTypeName(),
+                        args[0] == String.class);
+            }
+            return new Plan.PUnsupported("unsupported generic type "
+                    + parameterized.getTypeName());
+        }
+        if (target instanceof java.lang.reflect.GenericArrayType genericArray) {
+            return planArray(genericArray.getGenericComponentType());
+        }
+        if (!(target instanceof Class<?> raw)) {
+            return new Plan.PUnsupported("unsupported component type " + target);
+        }
+        return planClass(raw, raw.isPrimitive(), raw.getSimpleName());
+    }
+
+    private static Plan planArray(java.lang.reflect.Type component) {
+        Class<?> raw = component instanceof Class<?> c
+                ? c
+                : (Class<?>) ((java.lang.reflect.ParameterizedType) component).getRawType();
+        return new Plan.PArray(planOf(component), raw);
+    }
+
+    private static Plan planClass(Class<?> raw, boolean primitive, String simpleName) {
+        if (raw == String.class || raw == boolean.class || raw == Boolean.class
+                || raw == byte.class || raw == Byte.class || raw == short.class || raw == Short.class
+                || raw == int.class || raw == Integer.class || raw == long.class || raw == Long.class
+                || raw == float.class || raw == Float.class || raw == double.class || raw == Double.class
+                || raw == java.math.BigDecimal.class || raw == java.math.BigInteger.class) {
+            return new Plan.PScalar(raw, primitive, simpleName);
+        }
+        if (raw.isEnum()) {
+            return new Plan.PEnum(raw);
+        }
+        if (raw == Object.class) {
+            return new Plan.PNatural();
+        }
+        if (raw.isRecord()) {
+            return new Plan.PRecord(raw);
+        }
+        if (raw.isArray()) {
+            return planArray(raw.getComponentType());
+        }
+        if (!raw.isInterface() && !java.lang.reflect.Modifier.isAbstract(raw.getModifiers())) {
+            return new Plan.PPojo(raw);
+        }
+        return new Plan.PUnsupported("polymorphic binding is not supported for "
+                + raw.getSimpleName());
+    }
+
     private final Shape shape;
     private final Class<T> type;
     private final String[] names;        // record component names | sorted setter keys
     private final String[] simpleNames;  // the component type's getSimpleName() — the tree
     // path builds bound/missing messages from it (boxed "Integer" vs primitive "int")
     private final Class<?>[] rawTypes;
-    private final java.lang.reflect.Type[] genericTypes;
+    private final Plan[] plans;
     private final boolean[] primitives;
     private final Constructor<T> constructor; // record canonical | POJO public no-arg
     private final Method[] setters;           // POJO only, sorted by name
@@ -57,17 +135,17 @@ final class DirectBinder<T> implements TypedBinder<T> {
             this.names = new String[components.length];
             this.simpleNames = new String[components.length];
             this.rawTypes = new Class<?>[components.length];
-            this.genericTypes = new java.lang.reflect.Type[components.length];
+            this.plans = new Plan[components.length];
             this.primitives = new boolean[components.length];
             this.setters = new Method[0];
             Class<?>[] argTypes = new Class<?>[components.length];
             for (int i = 0; i < components.length; i++) {
                 names[i] = components[i].getName();
                 rawTypes[i] = components[i].getType();
-                genericTypes[i] = components[i].getGenericType();
                 argTypes[i] = rawTypes[i];
                 simpleNames[i] = rawTypes[i].getSimpleName();
                 primitives[i] = rawTypes[i].isPrimitive();
+                plans[i] = planOf(components[i].getGenericType());
             }
             try {
                 this.constructor = type.getDeclaredConstructor(argTypes);
@@ -82,15 +160,15 @@ final class DirectBinder<T> implements TypedBinder<T> {
         this.names = setterKeys(type);
         this.simpleNames = new String[names.length];
         this.rawTypes = new Class<?>[names.length];
-        this.genericTypes = new java.lang.reflect.Type[names.length];
+        this.plans = new Plan[names.length];
         this.primitives = new boolean[names.length];
         this.setters = sortedSetters(type);
         for (int i = 0; i < setters.length; i++) {
             Class<?> raw = setters[i].getParameterTypes()[0];
             rawTypes[i] = raw;
-            genericTypes[i] = setters[i].getGenericParameterTypes()[0];
             simpleNames[i] = raw.getSimpleName();
             primitives[i] = raw.isPrimitive();
+            plans[i] = planOf(setters[i].getGenericParameterTypes()[0]);
         }
         try {
             this.constructor = type.getConstructor();
@@ -238,8 +316,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
             path.pushName(names[comp]);
             Token valueToken = p.nextToken();
             try {
-                args[comp] = readValue(p, valueToken, genericTypes[comp], primitives[comp],
-                        simpleNames[comp], config, path);
+                args[comp] = readValue(p, valueToken, plans[comp], config, path);
             } catch (JsonBindException e) {
                 // the error is recorded in the component's slot; a container value has
                 // already been skipped by the throw site, scalar tokens were consumed by
@@ -308,8 +385,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
             path.pushName(names[comp]);
             Token valueToken = p.nextToken();
             try {
-                Object bound = readValue(p, valueToken, genericTypes[comp], primitives[comp],
-                        simpleNames[comp], config, path);
+                Object bound = readValue(p, valueToken, plans[comp], config, path);
                 setters[comp].invoke(instance, bound);
             } catch (InvocationTargetException rejected) {
                 if (errors == null) {
@@ -358,150 +434,145 @@ final class DirectBinder<T> implements TypedBinder<T> {
     @SuppressWarnings("unchecked")
     /** {@code first} is the ALREADY-CONSUMED value token — every reader in the direct
      * path follows the "who read the token passes it down" contract, so nested reads
-     * never double-consume. */
-    private Object readValue(JoltParser p, Token first, java.lang.reflect.Type target,
-                             boolean primitive, String simpleName, BindConfig config,
-                             BindPath path) {
+     * never double-consume. {@code plan} carries the construction-resolved type shape. */
+    private Object readValue(JoltParser p, Token first, Plan plan,
+                             BindConfig config, BindPath path) {
         Token t = first;
         if (t == Token.VALUE_NULL) {
-            if (primitive) {
-                throw new JsonBindException("JSON null for primitive component " + simpleName,
-                        path.resolve());
+            if (plan instanceof Plan.PScalar scalar && scalar.primitive()) {
+                throw new JsonBindException("JSON null for primitive component "
+                        + scalar.simpleName(), path.resolve());
             }
             return null;
         }
-        if (target instanceof java.lang.reflect.ParameterizedType parameterized) {
-            Class<?> raw = (Class<?>) parameterized.getRawType();
-            java.lang.reflect.Type[] args = parameterized.getActualTypeArguments();
-            if (raw == List.class) {
-                return readList(p, t, args[0], config, path);
-            }
-            if (raw == Map.class) {
-                if (args[0] != String.class) {
-                    throw new JsonBindException("map keys must be String, got " + args[0],
-                            path.resolve());
+        switch (plan) {
+            case Plan.PScalar scalar -> {
+                Class<?> raw = scalar.raw();
+                switch (raw.getSimpleName()) {
+                    case "String" -> {
+                        if (t != Token.VALUE_STRING) {
+                            throw tagError(p, t, "a string", path);
+                        }
+                        return p.textValue();
+                    }
+                    case "boolean", "Boolean" -> {
+                        if (t == Token.VALUE_TRUE) {
+                            return Boolean.TRUE;
+                        }
+                        if (t == Token.VALUE_FALSE) {
+                            return Boolean.FALSE;
+                        }
+                        throw tagError(p, t, "a boolean", path);
+                    }
+                    case "byte", "Byte" -> {
+                        long v = readLong(p, t, path);
+                        if (v > Byte.MAX_VALUE || v < Byte.MIN_VALUE) {
+                            throw new JsonBindException("number does not fit in "
+                                    + scalar.simpleName(), path.resolve());
+                        }
+                        return Byte.valueOf((byte) v);
+                    }
+                    case "short", "Short" -> {
+                        long v = readLong(p, t, path);
+                        if (v > Short.MAX_VALUE || v < Short.MIN_VALUE) {
+                            throw new JsonBindException("number does not fit in "
+                                    + scalar.simpleName(), path.resolve());
+                        }
+                        return Short.valueOf((short) v);
+                    }
+                    case "int", "Integer" -> {
+                        long v = readLong(p, t, path);
+                        if (v > Integer.MAX_VALUE || v < Integer.MIN_VALUE) {
+                            throw new JsonBindException("number does not fit in "
+                                    + scalar.simpleName(), path.resolve());
+                        }
+                        return Integer.valueOf((int) v);
+                    }
+                    case "long", "Long" -> {
+                        return Long.valueOf(readLong(p, t, path));
+                    }
+                    case "float", "Float" -> {
+                        requireNumber(p, t, path);
+                        return Float.valueOf(p.bigDecimalValue().floatValue());
+                    }
+                    case "double", "Double" -> {
+                        requireNumber(p, t, path);
+                        return Double.valueOf(p.bigDecimalValue().doubleValue());
+                    }
+                    case "BigDecimal" -> {
+                        requireNumber(p, t, path);
+                        return p.bigDecimalValue();
+                    }
+                    default -> { // BigInteger
+                        requireNumber(p, t, path);
+                        try {
+                            return p.bigDecimalValue().toBigIntegerExact();
+                        } catch (ArithmeticException lossy) {
+                            throw new JsonBindException("number is not a whole number",
+                                    path.resolve());
+                        }
+                    }
                 }
-                return readMap(p, t, args[1], config, path);
             }
-            throw new JsonBindException(
-                    "unsupported generic type " + parameterized.getTypeName(), path.resolve());
-        }
-        if (target instanceof java.lang.reflect.GenericArrayType genericArray) {
-            return readArray(p, t, genericArray.getGenericComponentType(), config, path);
-        }
-        if (!(target instanceof Class<?> raw)) {
-            throw new JsonBindException("unsupported component type " + target, path.resolve());
-        }
-        if (raw.isArray()) {
-            return readArray(p, t, raw.getComponentType(), config, path);
-        }
-        // strict scalars
-        if (raw == String.class) {
-            if (t != Token.VALUE_STRING) {
-                throw tagError(p, t, "a string", path);
+            case Plan.PEnum enumPlan -> {
+                if (t != Token.VALUE_STRING) {
+                    throw tagError(p, t, "a string", path);
+                }
+                String text = p.textValue();
+                try {
+                    return java.lang.Enum.valueOf((Class<? extends java.lang.Enum>) enumPlan.raw(), text);
+                } catch (IllegalArgumentException unknownName) {
+                    throw new JsonBindException("unknown enum name '" + text
+                            + "' for " + enumPlan.raw().getSimpleName(), path.resolve());
+                }
             }
-            return p.textValue();
-        }
-        if (raw == boolean.class || raw == Boolean.class) {
-            if (t == Token.VALUE_TRUE) {
-                return Boolean.TRUE;
+            case Plan.PList listPlan -> {
+                return readList(p, t, listPlan, config, path);
             }
-            if (t == Token.VALUE_FALSE) {
-                return Boolean.FALSE;
+            case Plan.PMap mapPlan -> {
+                if (!mapPlan.stringKeys()) {
+                    throw new JsonBindException("map keys must be String, got "
+                            + mapPlan.keyTypeName(), path.resolve());
+                }
+                return readMap(p, t, mapPlan, config, path);
             }
-            throw tagError(p, t, "a boolean", path);
-        }
-        if (raw == byte.class || raw == Byte.class) {
-            long v = readLong(p, t, path);
-            if (v > Byte.MAX_VALUE || v < Byte.MIN_VALUE) {
-                throw new JsonBindException("number does not fit in " + simpleName,
-                        path.resolve());
+            case Plan.PArray arrayPlan -> {
+                return readArray(p, t, arrayPlan, config, path);
             }
-            return Byte.valueOf((byte) v);
-        }
-        if (raw == short.class || raw == Short.class) {
-            long v = readLong(p, t, path);
-            if (v > Short.MAX_VALUE || v < Short.MIN_VALUE) {
-                throw new JsonBindException("number does not fit in " + simpleName,
-                        path.resolve());
+
+            case Plan.PRecord recordPlan -> {
+                if (t != Token.START_OBJECT) {
+                    throw tagError(p, t, "an object", path);
+                }
+                // the child's OWN binder carries the child's component table — recursion
+                // happens at runtime through the cache (self-referential records converge;
+                // construction itself never recurses)
+                return DirectBinder.forClass(recordPlan.raw())
+                        .readRecordBody(p, config, path, t);
             }
-            return Short.valueOf((short) v);
-        }
-        if (raw == int.class || raw == Integer.class) {
-            long v = readLong(p, t, path);
-            if (v > Integer.MAX_VALUE || v < Integer.MIN_VALUE) {
-                throw new JsonBindException("number does not fit in " + simpleName,
-                        path.resolve());
+            case Plan.PPojo pojoPlan -> {
+                if (t != Token.START_OBJECT) {
+                    // the tree path hands a scalar node to the POJO binder, whose setter loop
+                    // skips everything — the result is the default instance
+                    return constructEmptyOf(pojoPlan.raw(), path);
+                }
+                return DirectBinder.forClass(pojoPlan.raw()).readPojoBody(p, config, path, t);
             }
-            return Integer.valueOf((int) v);
-        }
-        if (raw == long.class || raw == Long.class) {
-            return Long.valueOf(readLong(p, t, path));
-        }
-        if (raw == float.class || raw == Float.class) {
-            requireNumber(p, t, path);
-            return Float.valueOf(p.bigDecimalValue().floatValue());
-        }
-        if (raw == double.class || raw == Double.class) {
-            requireNumber(p, t, path);
-            return Double.valueOf(p.bigDecimalValue().doubleValue());
-        }
-        if (raw == java.math.BigDecimal.class) {
-            requireNumber(p, t, path);
-            return p.bigDecimalValue();
-        }
-        if (raw == java.math.BigInteger.class) {
-            requireNumber(p, t, path);
-            try {
-                return p.bigDecimalValue().toBigIntegerExact();
-            } catch (ArithmeticException lossy) {
-                throw new JsonBindException("number is not a whole number", path.resolve());
+            case Plan.PNatural naturalPlan -> {
+                return switch (t) {
+                    case VALUE_STRING -> p.textValue();
+                    case VALUE_TRUE -> Boolean.TRUE;
+                    case VALUE_FALSE -> Boolean.FALSE;
+                    case VALUE_NUMBER_INT -> naturalInt(p);
+                    case VALUE_NUMBER_FLOAT -> naturalFloat(p);
+                    case START_OBJECT -> readNaturalObject(p, config, path);
+                    case START_ARRAY -> readNaturalArray(p, config, path);
+                    default -> throw new IllegalStateException("unexpected token " + t);
+                };
             }
+            case Plan.PUnsupported unsupported -> throw new JsonBindException(
+                    unsupported.message(), path.resolve());
         }
-        if (raw.isEnum()) {
-            if (t != Token.VALUE_STRING) {
-                throw tagError(p, t, "a string", path);
-            }
-            String text = p.textValue();
-            try {
-                return Enum.valueOf((Class<? extends Enum>) raw, text);
-            } catch (IllegalArgumentException unknownName) {
-                throw new JsonBindException("unknown enum name '" + text
-                        + "' for " + raw.getSimpleName(), path.resolve());
-            }
-        }
-        if (raw == Object.class) {
-            return switch (t) {
-                case VALUE_STRING -> p.textValue();
-                case VALUE_TRUE -> Boolean.TRUE;
-                case VALUE_FALSE -> Boolean.FALSE;
-                case VALUE_NUMBER_INT -> naturalInt(p);
-                case VALUE_NUMBER_FLOAT -> naturalFloat(p);
-                case START_OBJECT -> readNaturalObject(p, config, path);
-                case START_ARRAY -> readNaturalArray(p, config, path);
-                default -> throw new IllegalStateException("unexpected token " + t);
-            };
-        }
-        if (raw.isRecord()) {
-            if (t != Token.START_OBJECT) {
-                throw tagError(p, t, "an object", path);
-            }
-            // the child's OWN binder carries the child's component table — recursion
-            // happens at runtime through the cache (self-referential records converge;
-            // construction itself never recurses)
-            return DirectBinder.forClass(raw).readRecordBody(p, config, path, t);
-        }
-        if (!raw.isInterface() && !java.lang.reflect.Modifier.isAbstract(raw.getModifiers())) {
-            if (t != Token.START_OBJECT) {
-                // the tree path hands a scalar node to the POJO binder, whose setter loop
-                // skips everything — the result is the default instance
-                return constructEmptyOf(raw, path);
-            }
-            return DirectBinder.forClass(raw).readPojoBody(p, config, path, t);
-        }
-        throw new JsonBindException(
-                "polymorphic binding is not supported for " + raw.getSimpleName(),
-                path.resolve());
     }
 
     /** Natural mapping numbers: integral text → Long (overflow → BigDecimal), else Double
@@ -548,7 +619,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
             Token valueToken = p.nextToken();
             path.pushName(key);
             try {
-                out.put(key, readValue(p, valueToken, Object.class, false, null, config, path));
+                out.put(key, readValue(p, valueToken, NATURAL_PLAN, config, path));
             } finally {
                 path.pop();
             }
@@ -564,7 +635,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
         while (look != Token.END_ARRAY) {
             path.pushIndex(i);
             try {
-                out.add(readValue(p, look, Object.class, false, null, config, path));
+                out.add(readValue(p, look, NATURAL_PLAN, config, path));
             } finally {
                 path.pop();
             }
@@ -584,8 +655,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
     /** List&lt;X&gt;: the caller-read token must be START_ARRAY, then each element through
      * the element type's read. */
-    private List<Object> readList(JoltParser p, Token first,
-                                  java.lang.reflect.Type elementType,
+    private List<Object> readList(JoltParser p, Token first, Plan.PList listPlan,
                                   BindConfig config, BindPath path) {
         if (first != Token.START_ARRAY) {
             throw tagError(p, first, "an array", path);
@@ -596,7 +666,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
         while (look != Token.END_ARRAY) {
             path.pushIndex(i);
             try {
-                out.add(readValue(p, look, elementType, false, null, config, path));
+                out.add(readValue(p, look, listPlan.element(), config, path));
             } finally {
                 path.pop();
             }
@@ -608,8 +678,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
     /** Map&lt;String,X&gt;: the caller-read token must be START_OBJECT, each key materialized
      * (map keys are data). */
-    private Map<Object, Object> readMap(JoltParser p, Token first,
-                                        java.lang.reflect.Type valueType,
+    private Map<Object, Object> readMap(JoltParser p, Token first, Plan.PMap mapPlan,
                                         BindConfig config, BindPath path) {
         if (first != Token.START_OBJECT) {
             throw tagError(p, first, "an object", path);
@@ -621,7 +690,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
             Token valueToken = p.nextToken();
             path.pushName(key);
             try {
-                out.put(key, readValue(p, valueToken, valueType, false, null, config, path));
+                out.put(key, readValue(p, valueToken, mapPlan.value(), config, path));
             } finally {
                 path.pop();
             }
@@ -630,36 +699,48 @@ final class DirectBinder<T> implements TypedBinder<T> {
         return out;
     }
 
-    /** X[]: the length is unknown in a stream, so elements buffer before the array is built
-     * (the buffer is implementation scratch — the allocation contract reviews it in M6-T4). */
-    private Object readArray(JoltParser p, Token first,
-                             java.lang.reflect.Type componentType,
+    /**
+     * X[]: the length is unknown in a stream, so elements buffer before the array is built —
+     * in a POOLED scratch buffer (per-thread, grown to the fixture's shape in warmup, reused
+     * across calls and across nesting via the pool), so the steady-state allocation is the
+     * target array itself. The buffer is implementation scratch; the pool bounds its lifecycle.
+     */
+    private Object readArray(JoltParser p, Token first, Plan.PArray arrayPlan,
                              BindConfig config, BindPath path) {
-        Class<?> raw = componentType instanceof Class<?> c
-                ? c
-                : (Class<?>) ((java.lang.reflect.ParameterizedType) componentType).getRawType();
+        Class<?> raw = arrayPlan.raw();
         if (first != Token.START_ARRAY) {
             throw tagError(p, first, "an array", path);
         }
-        List<Object> buffer = new ArrayList<>();
-        int i = 0;
-        Token look = p.nextToken();
-        while (look != Token.END_ARRAY) {
-            path.pushIndex(i);
-            try {
-                buffer.add(readValue(p, look, componentType, raw.isPrimitive(),
-                        raw.getSimpleName(), config, path));
-            } finally {
-                path.pop();
+        DirectState st = state.get();
+        Object[] buffer = st.takeBuffer();
+        int len = 0;
+        try {
+            int i = 0;
+            Token look = p.nextToken();
+            while (look != Token.END_ARRAY) {
+                path.pushIndex(i);
+                try {
+                    if (len == buffer.length) {
+                        Object[] grown = new Object[len * 2];
+                        System.arraycopy(buffer, 0, grown, 0, len);
+                        buffer = grown;
+                    }
+                    buffer[len++] = readValue(p, look, arrayPlan.component(), config, path);
+                } finally {
+                    path.pop();
+                }
+                i++;
+                look = p.nextToken();
             }
-            i++;
-            look = p.nextToken();
+            Object out = java.lang.reflect.Array.newInstance(raw, len);
+            System.arraycopy(buffer, 0, out, 0, len);
+            return out;
+        } finally {
+            for (int j = 0; j < len; j++) {
+                buffer[j] = null; // release the element references into the pooled scratch
+            }
+            st.returnBuffer(buffer);
         }
-        Object out = java.lang.reflect.Array.newInstance(raw, buffer.size());
-        for (int j = 0; j < buffer.size(); j++) {
-            java.lang.reflect.Array.set(out, j, buffer.get(j));
-        }
-        return out;
     }
 
     /** VALUE_NUMBER_INT with the promotion-strategy overflow message; anything else is a tag error. */
@@ -733,11 +814,24 @@ final class DirectBinder<T> implements TypedBinder<T> {
         }
     }
 
-    /** Per-thread parser pair and path stack (the M1 reuse discipline, applied to binding). */
+    /** Per-thread parser pair, path stack, and array scratch pool (the M1 reuse discipline,
+     * applied to binding). */
     private static final class DirectState {
         final BindPath path = new BindPath();
+        private final java.util.ArrayDeque<Object[]> bufferPool = new java.util.ArrayDeque<>();
         private Utf8Parser utf8;
         private Utf16Parser utf16;
+
+        Object[] takeBuffer() {
+            Object[] buffered = bufferPool.pollFirst();
+            return buffered != null ? buffered : new Object[8];
+        }
+
+        void returnBuffer(Object[] buffer) {
+            if (bufferPool.size() < 8) {
+                bufferPool.addFirst(buffer);
+            }
+        }
 
         JoltParser parserFor(byte[] json) {
             if (utf8 == null) {
