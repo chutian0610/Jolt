@@ -107,6 +107,39 @@ Order strict = Bind.parse(jsonBytes, Order.class,
 while missing/null primitives throw; abstract targets are rejected (polymorphism is a future
 feature). Binding has no performance bars (same note as the tree layer).
 
+### Direct bind (M6)
+
+The direct read path: parser tokens feed the binder straight to the constructed target —
+no tree materialization. Semantically EQUIVALENT to the tree path (same values, same error
+matrix, same `$` paths — divergence between the two read paths is a gate failure), selected
+explicitly; the tree path stays the default. Steady-state allocation is the target object
+graph only.
+
+```java
+Order direct = Bind.parse(jsonBytes, Order.class,
+        BindConfig.defaults().withDirect());   // tokens → constructor, no tree
+assertEquals(treeParsed, direct);              // the two-arm gate: equal, always
+```
+
+**Performance and allocation (measured honestly, 3 forks × 5×1s / -prof gc):** the direct
+path runs **1.94× and 2.05×** the tree-path reflective parse on the top-level POJO fixture
+across two independent measurement runs (the pinned ≥2× bar sits ON the line — straddled,
+not claimed) and **1.26–1.34×** on the whole-graph record fixture (the nested share dilutes
+the top-level speedup). Disclosure: the direct arm is **2.2–2.25× faster than Jackson
+databind on records** (where Afterburner is inert) and **1.5–1.6× the default facade path**;
+Jackson afterburner's field-level bytecode writes run 2.3× the direct arm on POJOs — the
+competitor ceiling. Allocation: **3624 B/op vs the tree path's 7448** — zero tree/Node
+objects (JFR allocation-profile verified), the remainder being the target graph, text
+materialization, and reflective-construction bridging (the generated direct binder's M7
+elimination list). The full graph through BOTH paths is the binding gate; reproduction:
+
+```bash
+export JAVA_HOME=/path/to/jdk-21
+./gradlew :jolt-bench:jmhJar
+$JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*DirectBindBenchmark.*" -wi 5 -i 5 -f 3
+$JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*DirectBindAlloc.*" -prof gc -wi 5 -i 5 -f 3
+```
+
 ### Generated binders (jolt-gen, M4 + M5)
 
 An optional module that runtime-generates a dedicated binder class per target type via
