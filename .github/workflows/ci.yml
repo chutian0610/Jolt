@@ -41,5 +41,5 @@ jobs:
       - name: Benchmark smoke (single fork, short iterations)
         run: >
           ./gradlew :jolt-bench:jmh
-          -Pjmh.include='.*(StrictParityBenchmark|CompetitorBenchmark|GenVsReflectiveBenchmark).*'
+          -Pjmh.include='.*(StrictParityBenchmark|CompetitorBenchmark|GenVsReflectiveBenchmark|DirectBindBenchmark|DirectBindAllocBenchmark).*'
           -Pjmh.fork=1 -Pjmh.warmupIterations=1 -Pjmh.iterations=2 --continue
