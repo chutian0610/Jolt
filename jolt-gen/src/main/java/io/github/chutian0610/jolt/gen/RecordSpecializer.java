@@ -21,6 +21,8 @@ import static io.github.chutian0610.jolt.gen.Emit.BIND_EXCEPTION;
 import static io.github.chutian0610.jolt.gen.Emit.BIND_INTERNAL;
 import static io.github.chutian0610.jolt.gen.Emit.CHILD_FIELD_PREFIX;
 import static io.github.chutian0610.jolt.gen.Emit.DIRECT_SUPPORT;
+import static io.github.chutian0610.jolt.gen.Emit.GEN_BASE;
+import static io.github.chutian0610.jolt.gen.Emit.GEN_BASE_PARSE_TOKENS_BODY_DESC;
 import static io.github.chutian0610.jolt.gen.Emit.NODE;
 import static io.github.chutian0610.jolt.gen.Emit.NODE_GET_DESC;
 import static io.github.chutian0610.jolt.gen.Emit.NODE_TYPE_DESC;
@@ -75,30 +77,49 @@ final class RecordSpecializer {
     static final String PRIMITIVES_FIELD = "jolt$primitives";
     static final String SIMPLE_NAMES_FIELD = "jolt$simpleNames";
     static final String PARSE_TOKENS_METHOD = "parseTokens";
+    static final String PARSE_TOKENS_BODY_METHOD = "parseTokensBody";
     static final String HAS_DIRECT_READ_METHOD = "hasDirectRead";
 
     private RecordSpecializer() {}
 
     /**
-     * The M7-T1 direct-read capability: every component an inline strict scalar (String,
-     * boolean, the numeric widths) — the tracer scope. Nested records/POJOs, enums, and
-     * collections join with the spectrum tickets; until then a non-capable record declares
-     * no {@code parseTokens} at all, so the facade's direct dispatch keeps the reflective
-     * direct binder (a registry hit without a direct read is the documented miss arm).
+     * The direct-read capability, Class-based so a parent can classify its CHILD components
+     * without the child's plan: a public record whose components are all inline strict
+     * scalars (String, boolean, the numeric widths), enums, or nested RECORD components —
+     * the nested read dispatches to the child's own emitted direct body, or the reflective
+     * door ({@code DirectSupport.nestedRecordBody}) when the child has none. A pure
+     * component-kind check: no recursion across the CHILD edge, so self-referential records
+     * terminate at generation time. POJO children and collections join with the T3 ticket.
      */
-    static boolean isDirectCapable(GenPlan<?> plan) {
-        if (!plan.isRecord
-                || !java.lang.reflect.Modifier.isPublic(plan.type.getModifiers())) {
+    static boolean isDirectCapable(Class<?> type) {
+        if (!type.isRecord() || !java.lang.reflect.Modifier.isPublic(type.getModifiers())) {
             return false;
         }
-        for (java.lang.reflect.Type genericType : plan.genericTypes) {
-            Emit.Kind kind = kindOf(rawOf(genericType));
-            if (kind != Emit.Kind.STRING && kind != Emit.Kind.BOOLEAN
-                    && kind != Emit.Kind.NUMBER) {
+        for (java.lang.reflect.RecordComponent component : type.getRecordComponents()) {
+            if (!kindEmittable(component.getType())) {
                 return false;
             }
         }
         return true;
+    }
+
+    static boolean isDirectCapable(GenPlan<?> plan) {
+        return isDirectCapable(plan.type);
+    }
+
+    private static boolean kindEmittable(Class<?> raw) {
+        // the emitted bytecode NAMES every reference component type — LDC class constants
+        // and CHECKCASTs resolve from the generated class's runtime package, so a
+        // non-public component would throw IllegalAccessError at class load where the
+        // reflective arm binds fine. Such records keep the reflective direct binder.
+        if (!java.lang.reflect.Modifier.isPublic(raw.getModifiers())) {
+            return false;
+        }
+        return switch (kindOf(raw)) {
+            case STRING, BOOLEAN, NUMBER, ENUM -> true;
+            case CHILD -> raw.isRecord(); // the nested read: child body call or the door
+            default -> false;             // GENERIC (collections/maps/Object) — the T3 ticket
+        };
     }
 
     /** Adds the specialized fields and straight-line overrides to the generated class. */
@@ -140,12 +161,16 @@ final class RecordSpecializer {
                 .defineMethod(INIT_CHILDREN_METHOD, void.class, Visibility.PUBLIC)
                 .intercept(new Implementation.Simple(new InitChildrenBody(self, plan)));
         if (direct) {
-            // the third form: the token-consuming direct read, plus the capability flag the
-            // facade's withDirect dispatch consults
+            // the third form: the token-consuming direct read (the document root), its
+            // nested body form (the caller consumed this value's START_OBJECT), and the
+            // capability flag the facade's withDirect dispatch consults
             builder = builder
                     .defineMethod(PARSE_TOKENS_METHOD, Object.class, Visibility.PUBLIC)
                     .withParameters(JoltParser.class, BindConfig.class)
-                    .intercept(new Implementation.Simple(new ParseTokensBody(self, plan)))
+                    .intercept(new Implementation.Simple(new ParseTokensBody(self, plan, false)))
+                    .defineMethod(PARSE_TOKENS_BODY_METHOD, Object.class, Visibility.PUBLIC)
+                    .withParameters(JoltParser.class, BindConfig.class)
+                    .intercept(new Implementation.Simple(new ParseTokensBody(self, plan, true)))
                     .defineMethod(HAS_DIRECT_READ_METHOD, boolean.class, Visibility.PUBLIC)
                     .intercept(new Implementation.Simple(
                             (mv, context, method) -> {
@@ -524,17 +549,23 @@ final class RecordSpecializer {
         private static final int VALUE_TOKEN = 7;
         private static final int THROWABLE = 8;
         private static final int RESULT = 9;
-        private static final int FIRST_COMPONENT = 10;
+        private static final int TEXT = 10;      // the enum read's text (the handler message)
+        private static final int FIRST_COMPONENT = 11;
 
         private final String self;
         private final GenPlan<?> plan;
         private final String recordInternal;
         private final boolean hasPrimitives;
+        private final boolean nested;
 
-        ParseTokensBody(String self, GenPlan<?> plan) {
+        /** {@code nested} selects the body form: the caller consumed this value's
+         * START_OBJECT and owns the path position and the drain — no path reset, no root
+         * dispatch, no tail drain. */
+        ParseTokensBody(String self, GenPlan<?> plan, boolean nested) {
             this.self = self;
             this.plan = plan;
             this.recordInternal = internal(plan.type);
+            this.nested = nested;
             boolean any = false;
             for (java.lang.reflect.Type genericType : plan.genericTypes) {
                 any |= rawOf(genericType).isPrimitive();
@@ -594,6 +625,7 @@ final class RecordSpecializer {
             frameLocals[VALUE_TOKEN] = TOKEN_INTERNAL;
             frameLocals[THROWABLE] = "java/lang/Throwable";
             frameLocals[RESULT] = recordInternal;
+            frameLocals[TEXT] = "java/lang/String";
             for (int i = 0; i < n; i++) {
                 frameLocals[FIRST_COMPONENT + i] = frameType(rawOf(plan.genericTypes[i]));
             }
@@ -604,8 +636,12 @@ final class RecordSpecializer {
             Label drainHead = new Label();
             Label drained = new Label();
 
-            // entry: reset the shared path, zero the pooled seen flags, default every slot
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetPath", "()V", false);
+            // entry: the root form resets the shared path (the nested form inherits the
+            // caller's path position); both zero the pooled seen flags and default every slot
+            if (!nested) {
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetPath", "()V",
+                        false);
+            }
             pushIndex(mv, n);
             mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "takeSeen", "(I)[Z", false);
             mv.visitVarInsn(Opcodes.ASTORE, SEEN);
@@ -618,26 +654,30 @@ final class RecordSpecializer {
             nullStore(mv, VALUE_TOKEN);
             nullStore(mv, THROWABLE);
             nullStore(mv, RESULT);
+            nullStore(mv, TEXT);
             for (int i = 0; i < n; i++) {
                 defaultStore(mv, slotOf(i), rawOf(plan.genericTypes[i]));
             }
 
-            // root dispatch: a non-object document goes straight to the sweep — the first
-            // missing primitive raises there; an all-reference record raises its own marker
-            // (the reflective arm's spectrum-ticket shape)
-            mv.visitVarInsn(Opcodes.ALOAD, 1);
-            mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
-                    PARSER_NEXT_TOKEN_DESC, true);
-            mv.visitVarInsn(Opcodes.ASTORE, TOKEN);
-            mv.visitVarInsn(Opcodes.ALOAD, TOKEN);
-            mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "START_OBJECT", TOKEN_DESC);
-            mv.visitJumpInsn(Opcodes.IF_ACMPEQ, loopHead);
-            if (hasPrimitives) {
-                mv.visitJumpInsn(Opcodes.GOTO, sweep);
-            } else {
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "nonObjectRecordRoot",
-                        "()Ljava/lang/RuntimeException;", false);
-                mv.visitInsn(Opcodes.ATHROW);
+            if (!nested) {
+                // root dispatch: a non-object document goes straight to the sweep — the
+                // first missing primitive raises there; an all-reference record raises its
+                // own marker (the reflective arm's spectrum-ticket shape). The nested form
+                // skips the dispatch: the caller already tag-checked this START_OBJECT.
+                mv.visitVarInsn(Opcodes.ALOAD, 1);
+                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
+                        PARSER_NEXT_TOKEN_DESC, true);
+                mv.visitVarInsn(Opcodes.ASTORE, TOKEN);
+                mv.visitVarInsn(Opcodes.ALOAD, TOKEN);
+                mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "START_OBJECT", TOKEN_DESC);
+                mv.visitJumpInsn(Opcodes.IF_ACMPEQ, loopHead);
+                if (hasPrimitives) {
+                    mv.visitJumpInsn(Opcodes.GOTO, sweep);
+                } else {
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT,
+                            "nonObjectRecordRoot", "()Ljava/lang/RuntimeException;", false);
+                    mv.visitInsn(Opcodes.ATHROW);
+                }
             }
 
             // the field loop
@@ -713,30 +753,37 @@ final class RecordSpecializer {
                     Type.getConstructorDescriptor(plan.constructor), false);
             mv.visitLabel(constructEnd);
             mv.visitVarInsn(Opcodes.ASTORE, RESULT);
+            if (nested) {
+                // the body form hands the value back — the caller owns the cursor and the
+                // drain
+                mv.visitVarInsn(Opcodes.ALOAD, RESULT);
+                mv.visitInsn(Opcodes.ARETURN);
+            } else {
+                // the root form's drain runs exactly when the root was an object: the
+                // loop-exit token in slot 6 is END_OBJECT only on that path (a non-object
+                // root leaves its own token there and returns without draining — the
+                // reflective arm's shape); parser syntax errors in the tail surface
+                // unchanged
+                mv.visitVarInsn(Opcodes.ALOAD, TOKEN);
+                mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "END_OBJECT", TOKEN_DESC);
+                mv.visitJumpInsn(Opcodes.IF_ACMPEQ, drainHead);
+                mv.visitVarInsn(Opcodes.ALOAD, RESULT);
+                mv.visitInsn(Opcodes.ARETURN);
 
-            // the drain runs exactly when the root was an object: the loop-exit token in
-            // slot 6 is END_OBJECT only on that path (a non-object root leaves its own
-            // token there and returns without draining — the reflective arm's shape);
-            // parser syntax errors in the tail surface unchanged
-            mv.visitVarInsn(Opcodes.ALOAD, TOKEN);
-            mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "END_OBJECT", TOKEN_DESC);
-            mv.visitJumpInsn(Opcodes.IF_ACMPEQ, drainHead);
-            mv.visitVarInsn(Opcodes.ALOAD, RESULT);
-            mv.visitInsn(Opcodes.ARETURN);
+                mv.visitLabel(drainHead);
+                slots.emit(mv);
+                mv.visitVarInsn(Opcodes.ALOAD, 1);
+                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
+                        PARSER_NEXT_TOKEN_DESC, true);
+                mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "EOF", TOKEN_DESC);
+                mv.visitJumpInsn(Opcodes.IF_ACMPEQ, drained);
+                mv.visitJumpInsn(Opcodes.GOTO, drainHead);
 
-            mv.visitLabel(drainHead);
-            slots.emit(mv);
-            mv.visitVarInsn(Opcodes.ALOAD, 1);
-            mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
-                    PARSER_NEXT_TOKEN_DESC, true);
-            mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "EOF", TOKEN_DESC);
-            mv.visitJumpInsn(Opcodes.IF_ACMPEQ, drained);
-            mv.visitJumpInsn(Opcodes.GOTO, drainHead);
-
-            mv.visitLabel(drained);
-            slots.emit(mv);
-            mv.visitVarInsn(Opcodes.ALOAD, RESULT);
-            mv.visitInsn(Opcodes.ARETURN);
+                mv.visitLabel(drained);
+                slots.emit(mv);
+                mv.visitVarInsn(Opcodes.ALOAD, RESULT);
+                mv.visitInsn(Opcodes.ARETURN);
+            }
 
             mv.visitLabel(rejected);
             slots.emit(mv, "java/lang/Throwable");
@@ -863,8 +910,10 @@ final class RecordSpecializer {
                     mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
                 }
                 case NUMBER -> emitNumberRead(mv, slots, raw, simpleName, slot, tryEnd);
+                case ENUM -> emitEnumRead(mv, slots, raw, simpleName, slot, tryEnd);
+                case CHILD -> emitChildRead(mv, slots, i, raw, slot, tryEnd);
                 default -> throw new IllegalStateException(
-                        "component " + plan.names[i] + " is not a direct scalar");
+                        "component " + plan.names[i] + " is not a direct-read shape");
             }
 
             mv.visitLabel(nullEdge);
@@ -877,6 +926,78 @@ final class RecordSpecializer {
             } else {
                 mv.visitJumpInsn(Opcodes.GOTO, join);
             }
+        }
+
+        /**
+         * The enum read: VALUE_STRING gate, the text into the shared TEXT slot, then
+         * {@code Enum.valueOf} with the unknown-name handler raising the shared message
+         * (the M5-T1 handler discipline — the handler frame declares the pre-assignment
+         * shape; here the uniform up-front initialization makes that the method-wide shape).
+         */
+        private void emitEnumRead(MethodVisitor mv, Emit.FrameTracker slots, Class<?> raw,
+                                  String simpleName, int slot, Label tryEnd) {
+            requireToken(mv, slots, "VALUE_STRING", "a string");
+            mv.visitVarInsn(Opcodes.ALOAD, 1);
+            mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "textValue",
+                    PARSER_TEXT_VALUE_DESC, true);
+            mv.visitVarInsn(Opcodes.ASTORE, TEXT);
+            Label tryStart = new Label();
+            Label exact = new Label();
+            Label lossy = new Label();
+            mv.visitTryCatchBlock(tryStart, exact, lossy, "java/lang/IllegalArgumentException");
+            mv.visitLabel(tryStart);
+            mv.visitLdcInsn(Type.getType(raw));
+            mv.visitVarInsn(Opcodes.ALOAD, TEXT);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Enum", "valueOf",
+                    "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;", false);
+            mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
+            mv.visitLabel(exact);
+            mv.visitVarInsn(Opcodes.ASTORE, slot);
+            mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
+            mv.visitLabel(lossy);
+            slots.emit(mv, "java/lang/IllegalArgumentException");
+            mv.visitInsn(Opcodes.POP);
+            mv.visitVarInsn(Opcodes.ALOAD, TEXT);
+            mv.visitLdcInsn(simpleName);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "unknownEnumName",
+                    "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/RuntimeException;",
+                    false);
+            mv.visitInsn(Opcodes.ATHROW);
+        }
+
+        /**
+         * The nested-record read: the START_OBJECT gate (the shared tag rejection — a
+         * container value is skipped so the loop stays aligned), then the child's body on
+         * the SAME parser stream. The dispatch bakes in at generation time: a child with an
+         * emitted direct body takes the monomorphic virtual call; otherwise the reflective
+         * door ({@code DirectSupport.nestedRecordBody} — a child whose own components are
+         * not emittable; non-public component types never reach either arm, they keep the
+         * whole parent on the reflective binder). Either way the child continues where this
+         * parent stopped: it consumes the child object's fields and its END_OBJECT, raises
+         * with the current path position, and never drains (the document root owns that).
+         */
+        private void emitChildRead(MethodVisitor mv, Emit.FrameTracker slots, int i,
+                                   Class<?> raw, int slot, Label tryEnd) {
+            requireToken(mv, slots, "START_OBJECT", "an object");
+            if (isDirectCapable(raw)) {
+                mv.visitVarInsn(Opcodes.ALOAD, 0);
+                mv.visitFieldInsn(Opcodes.GETFIELD, self, Emit.CHILD_FIELD_PREFIX + i,
+                        TYPED_BINDER_FIELD_DESC);
+                mv.visitTypeInsn(Opcodes.CHECKCAST, GEN_BASE);
+                mv.visitVarInsn(Opcodes.ALOAD, 1);
+                mv.visitVarInsn(Opcodes.ALOAD, 2);
+                mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, GEN_BASE, PARSE_TOKENS_BODY_METHOD,
+                        GEN_BASE_PARSE_TOKENS_BODY_DESC, false);
+            } else {
+                mv.visitVarInsn(Opcodes.ALOAD, 1);
+                mv.visitVarInsn(Opcodes.ALOAD, 2);
+                mv.visitLdcInsn(Type.getType(raw));
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "nestedRecordBody",
+                        Emit.NESTED_RECORD_BODY_DESC, false);
+            }
+            mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
+            mv.visitVarInsn(Opcodes.ASTORE, slot);
+            mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
         }
 
         /** The tag gate: the token must carry the expected tag, else the shared rejection. */

@@ -285,7 +285,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
     // --- record body ---
 
-    private T readRecordBody(JoltParser p, BindConfig config, BindPath path, Token first) {
+    T readRecordBody(JoltParser p, BindConfig config, BindPath path, Token first) {
         Object[] args = new Object[names.length]; // null = missing (reference nulls and
         // missing components are indistinguishable by design — both bind as null). The
         // construction bridge the generated direct read replaces with stack-passed locals.
@@ -491,8 +491,8 @@ final class DirectBinder<T> implements TypedBinder<T> {
                 try {
                     return java.lang.Enum.valueOf((Class<? extends java.lang.Enum>) enumPlan.raw(), text);
                 } catch (IllegalArgumentException unknownName) {
-                    throw new JsonBindException("unknown enum name '" + text
-                            + "' for " + enumPlan.raw().getSimpleName(), path.resolve());
+                    throw DirectSupport.unknownEnumName(text,
+                            enumPlan.raw().getSimpleName(), path);
                 }
             }
             case Plan.PList listPlan -> {

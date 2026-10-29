@@ -109,6 +109,11 @@ public final class DirectSupport {
         return notWholeNumber(STATE.get().path);
     }
 
+    /** The unknown-enum-name rejection at the CURRENT path position. */
+    public static RuntimeException unknownEnumName(String text, String simpleName) {
+        return unknownEnumName(text, simpleName, STATE.get().path);
+    }
+
     /** The canonical constructor rejected the bound values — the raw cause is interpolated
      * exactly like the reflective arm's {@code getCause()} message. */
     public static RuntimeException constructorRejected(Throwable cause) {
@@ -160,6 +165,19 @@ public final class DirectSupport {
                 "all-reference records bind from non-object documents with the M6 spectrum tickets");
     }
 
+    /**
+     * The nested-record door: the child record's body read for a value whose START_OBJECT
+     * the caller already consumed (the child continues the caller's cursor; the caller owns
+     * the path position, the error slotting, and the drain). This is the reflective arm of
+     * the generated parent's nested dispatch — used when the child has no emitted direct
+     * body (non-capable or non-public child). Recursion converges through the per-class
+     * binder cache (self-referential records terminate on finite documents).
+     */
+    public static Object nestedRecordBody(JoltParser p, BindConfig config, Class<?> childType) {
+        return DirectBinder.forClass(childType)
+                .readRecordBody(p, config, STATE.get().path, Token.START_OBJECT);
+    }
+
     // --- the explicit-path cores (the reflective direct binder's call sites) ---
 
     /** The tree layer's tag-rejection message at the value's path. A container value is
@@ -205,6 +223,12 @@ public final class DirectSupport {
     /** The BigInteger fraction rejection. */
     static RuntimeException notWholeNumber(BindPath path) {
         throw new JsonBindException("number is not a whole number", path.resolve());
+    }
+
+    /** The unknown-enum-name rejection. */
+    static RuntimeException unknownEnumName(String text, String simpleName, BindPath path) {
+        throw new JsonBindException("unknown enum name '" + text + "' for " + simpleName,
+                path.resolve());
     }
 
     /** The canonical constructor rejected the bound values. */

@@ -40,6 +40,14 @@ final class Emit {
     static final String BUILDER_TOSTRING_DESC = "()Ljava/lang/String;";
     static final String TYPED_BINDER_FIELD_DESC = "Lio/github/chutian0610/jolt/bind/TypedBinder;";
     static final String GENERATED_INTERNAL = internal(GeneratedBinders.class);
+    static final String GEN_BASE = internal(GenBinderBase.class);
+    static final String GEN_BASE_PARSE_TOKENS_BODY_DESC =
+            "(Lio/github/chutian0610/jolt/JoltParser;"
+                    + "Lio/github/chutian0610/jolt/bind/BindConfig;)Ljava/lang/Object;";
+    static final String NESTED_RECORD_BODY_DESC =
+            "(Lio/github/chutian0610/jolt/JoltParser;"
+                    + "Lio/github/chutian0610/jolt/bind/BindConfig;"
+                    + "Ljava/lang/Class;)Ljava/lang/Object;";
     static final String DIRECT_SUPPORT = internal(io.github.chutian0610.jolt.bind.DirectSupport.class);
     static final String PARSER = internal(io.github.chutian0610.jolt.JoltParser.class);
     static final String TOKEN_INTERNAL = internal(io.github.chutian0610.jolt.Token.class);

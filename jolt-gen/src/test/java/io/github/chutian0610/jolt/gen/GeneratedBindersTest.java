@@ -217,4 +217,50 @@ class GeneratedBindersTest {
                 && fields.hasDirectRead());
         assertThrows(UnsupportedOperationException.class, () -> order.parseTokens(null, null));
     }
+
+    public record Graded(String course, BindFixtures.Status status) {}
+
+    public record Shelved(String id, BindFixtures.Item item) {}
+
+    @Test
+    void enumAndNestedRecordComponentsJoinTheDirectRead() throws Exception {
+        // T2 widens the capability: enum components and nested RECORD children are
+        // emittable — both forms declared, the flag raised, and the nested value binds
+        // through the generated arm exactly like the tree path
+        for (Class<?> capable : new Class<?>[]{Graded.class, Shelved.class}) {
+            TypedBinder<?> binder = GeneratedBinders.forType(capable);
+            assertTrue(binder instanceof io.github.chutian0610.jolt.bind.GeneratedFields fields
+                    && fields.hasDirectRead(), capable.getName());
+            assertNotNull(binder.getClass().getDeclaredMethod("parseTokensBody",
+                    io.github.chutian0610.jolt.JoltParser.class, BindConfig.class),
+                    capable.getName());
+            assertNotNull(binder.getClass().getDeclaredMethod("parseTokens",
+                    io.github.chutian0610.jolt.JoltParser.class, BindConfig.class),
+                    capable.getName());
+        }
+        String doc = "{\"id\":\"s1\",\"item\":{\"sku\":\"a\",\"quantity\":2,\"price\":1.50}}";
+        Object shelved = GeneratedBinders.forType(Shelved.class).parseTokens(
+                Jolt.utf8Parser(doc.getBytes(StandardCharsets.UTF_8)), BindConfig.defaults());
+        assertEquals(Bind.parse(doc, Shelved.class), shelved);
+    }
+
+    enum Pkg { A }
+
+    public record WithPkgEnum(Pkg p) {}
+
+    record HidRec(int v) {}
+
+    public record WithHidRecord(HidRec r) {}
+
+    @Test
+    void nonPublicComponentTypesKeepTheRecordOffTheDirectRead() {
+        // the emitted bytecode NAMES every reference component type — LDC class constants
+        // and CHECKCASTs resolve from the generated class's runtime package — so a
+        // non-public enum or record component keeps the whole record on the reflective
+        // binder (the capability predicate refuses, the facade falls back)
+        assertFalse(RecordSpecializer.isDirectCapable(WithPkgEnum.class));
+        assertFalse(RecordSpecializer.isDirectCapable(WithHidRecord.class));
+        assertTrue(RecordSpecializer.isDirectCapable(Graded.class));
+        assertTrue(RecordSpecializer.isDirectCapable(Shelved.class));
+    }
 }

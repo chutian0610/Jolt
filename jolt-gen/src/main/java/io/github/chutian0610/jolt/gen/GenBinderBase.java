@@ -1,5 +1,6 @@
 package io.github.chutian0610.jolt.gen;
 
+import io.github.chutian0610.jolt.JoltParser;
 import io.github.chutian0610.jolt.JoltWriter;
 import io.github.chutian0610.jolt.bind.Bind;
 import io.github.chutian0610.jolt.bind.BindConfig;
@@ -37,6 +38,19 @@ public class GenBinderBase implements TypedBinder<Object>, GeneratedFields {
             return parseRecord(node, path, config);
         }
         return parsePojo(node, path, config);
+    }
+
+    /**
+     * The nested form of the direct read: the CALLER has already consumed this value's
+     * START_OBJECT off the shared parser stream and owns the path position, the drain, and
+     * the cursor — the body continues where the caller stopped (the M6
+     * {@code readRecordBody} contract, cross-package). Capable generated classes override
+     * it with the emitted body; the parent's nested dispatch consults the child's emitted
+     * shape at generation time, so the default is a tripwire, not a fallback.
+     */
+    public Object parseTokensBody(JoltParser parser, BindConfig config) {
+        throw new UnsupportedOperationException(
+                getClass().getName() + " carries no direct body");
     }
 
     @Override
