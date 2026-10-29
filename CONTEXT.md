@@ -45,9 +45,11 @@ The direct read path: parser tokens feed the binder straight to constructed targ
 skipping the tree layer. Semantically equivalent to the tree path — same values, same error
 matrix, same `$` paths; a divergence between the two read paths is a gate failure, not a
 footnote. Selected explicitly by the caller (the tree path stays the default); steady-state
-allocation is the target object graph only (boxing included — the values themselves), with
-error paths assembled lazily on failure. The write direction has been streaming since M4;
-"direct" names what the read side skips.
+allocation is the target object graph only, with error paths assembled lazily on failure.
+The write direction has been streaming since M4; "direct" names what the read side skips.
+Two implementation grades share one seam: the reflective direct binder (jolt-bind) and the
+generated direct binder (jolt-gen — the same generated class as the tree-path specialist,
+reading tokens instead of nodes).
 _Avoid_: streaming parse (the write side streams too — "direct" names the skipped tree),
 fast binding.
 
@@ -55,10 +57,10 @@ fast binding.
 The binding failure: a runtime exception carrying the JSON path (`$.user.tags[2]`), distinct from `JsonParseException` — parse errors are syntax, bind errors are data mapping. Two layers, two exceptions.
 
 **jolt-gen**:
-The optional generated-binding module (M4/M5): runtime-generates a dedicated binder class per target type via ByteBuddy, with M5 specialization inlining component accessors and strict checks directly into the generated parse/write bytecode. An optional artifact — the core, tree, and bind modules never depend on it.
+The optional generated-binding module (M4/M5/M7): runtime-generates a dedicated binder class per target type via ByteBuddy — M5 specializes the tree-path parse/write into straight-line bytecode, M7 adds the token-consuming direct read to the same generated class. An optional artifact — the core, tree, and bind modules never depend on it.
 
 **Specialization**:
-The M5 upgrade: generated binders emit per-component straight-line bytecode (accessor calls, inlined strict checks, writer.fieldName constants) instead of delegating to plan execution. The bar: parse ≥ 2×, write ≥ 1.5× over the reflective path, measured on the M4 baseline.
+The M5/M7 upgrade: generated binders emit straight-line bytecode instead of delegating to generic execution — M5 for the tree-path parse/write (accessor calls, inlined strict checks, writer.fieldName constants), M7 for the direct read (token consumption and construction inlined into the binder, reflective bridging eliminated). Bars are measured against the reflective equivalents on the calibrated baselines.
 
 **TypedBinder**:
 The binding seam: parse (from a Node) and write (to a JoltWriter) for one target type. Two adapters: `ReflectiveBinder` (jolt-bind, metadata cached per type) and the generated binders (jolt-gen). The `Bind` facade dispatches across both.
