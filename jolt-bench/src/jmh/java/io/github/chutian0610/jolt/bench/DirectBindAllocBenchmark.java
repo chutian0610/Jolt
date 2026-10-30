@@ -2,6 +2,7 @@ package io.github.chutian0610.jolt.bench;
 
 import io.github.chutian0610.jolt.bind.Bind;
 import io.github.chutian0610.jolt.bind.BindConfig;
+import io.github.chutian0610.jolt.gen.GeneratedBinders;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Fork;
@@ -24,32 +25,31 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * The M6 allocation-contract proof (T44): the direct read path's steady-state allocation is
- * the TARGET OBJECT GRAPH ONLY (target instances, nested objects, collection containers and
- * elements, boxed scalars — the values themselves), with ≈ 0 B/op beyond it. The proof shape:
- * {@code directParse} (the direct arm) compared against {@code baselineConstruct} (a
- * hand-written constructor of the SAME object graph from the same literals — the target
- * graph's own allocation footprint) and {@code treeParse} (the default tree-path arm,
- * disclosed for the Node-graph delta). The contract holds when direct ≈ baseline within
- * measurement resolution.
+ * The allocation proof (T44 for the M6 reflective read; T51 for the M7 generated read):
+ * the direct read path's steady-state allocation is the TARGET OBJECT GRAPH ONLY, with the
+ * reflective-construction bridging (the args Object[] + constructor-path boxing) as the
+ * eliminated delta between the two direct grades. Arms: {@code reflectiveDirectParseOrder}
+ * (the M6 measured arm — this class never registers binders, so the lazy registry miss
+ * keeps withDirect on the reflective direct read), {@code generatedDirectParseOrder} (its
+ * state registers the binder — the same facade call routes to the generated read),
+ * {@code treeParseOrder} (the Node-toll disclosure) and {@code baselineConstructOrder}
+ * (the target graph's own footprint).
  *
  * <p><b>Measured conclusion (Apple Silicon / Zulu 21, 3 forks × 5×1s, -prof gc — committed
- * per the calibration clause):</b> the contract as written (direct ≈ baseline, ≈0 beyond the
- * target graph) is NOT met: baseline 960 B/op, direct 3624 ± 0 B/op, tree 7448 B/op. The
- * recalibration is evidence-backed and attributed: JFR allocation samples show NO tree/Node
- * classes on the direct arm — the entire 3624 decomposes into (a) the target object graph
- * (Order/Customer/Item/BigDecimal/containers/boxing, ≈35%), (b) text materialization and its
- * JDK String/BigDecimal construction companions (byte[]/char[], ≈45% — the data itself plus
- * the unavoidable decode buffers), (c) reflective-construction bridging (the args
- * Object[] + primitive boxing around newInstance, ≈15%), (d) framework noise (≈5%). The
- * eliminated-and-accounted list: component plans are resolved at construction (Type[] from
- * getActualTypeArguments was allocating per parse — eliminated, JFR-verified), array
- * elements buffer in a pooled per-thread scratch (reused, zero steady-state), field-name
- * matching is zero-allocation (fieldNameEquals). The remaining bridging is the reflective
- * constructor's essence and is on the M7 (generated direct binder) elimination list, which
- * also carries the BigDecimal rawText span-construction candidate. The direct arm runs at
- * 48.7% of the tree arm's allocation — the Node toll is gone; the rest is data and
- * reflective bridging.
+ * per the calibration clause):</b> baseline 960 B/op · generated direct **3488 ± 0 B/op** ·
+ * reflective direct **3624 ± 0 B/op** (M6-T4's number reproduced exactly — the lazy-registry
+ * routing is verified) · tree 7448 B/op. The bridging elimination = **−136 B/op (−3.8%)**,
+ * matching the predicted args Object[10] + Long/Double constructor-boxing cost — the
+ * bridging classes are GONE from the generated arm. The JFR class distribution (single
+ * fork, qualitative) shows the generated arm dominated by the target graph and text
+ * (byte[]/char[] decode buffers, BigDecimal/BigInteger/String, LinkedHashMap$Entry,
+ * Order/Item/Customer) with NO Long/Double/Boolean constructor-boxing classes in its
+ * samples — while the reflective arm still shows them (Double sampled) — and the Gen$
+ * class live on the generated arm's allocation stacks (runtime identity of the arm).
+ * Object[] samples appear on BOTH arms from the target graph's ArrayList/HashMap
+ * containers and sampler noise — the B/op delta is the quantitative bridging proof; the
+ * throughput A/B (DirectBindBenchmark) shows the elimination is allocation-side,
+ * throughput-neutral.
  *
  * <p>Reproduce: {@code ./gradlew :jolt-bench:jmhJar} then
  * {@code java -jar jolt-bench/build/libs/*-jmh.jar ".*DirectBindAlloc.*" -prof gc -wi 5 -i 5 -f 3}
@@ -94,10 +94,39 @@ public class DirectBindAllocBenchmark {
         tree = BindConfig.defaults();
     }
 
-    /** The direct arm under proof. */
+    /**
+     * The REFLECTIVE direct arm (the M6 measured arm, kept under its measured name's
+     * neighbor): this class's setup never registers binders, so the lazy registry miss
+     * keeps withDirect on the M6 reflective direct binder — the A/B baseline whose 3624
+     * B/op carried the ~15% reflective-construction bridging.
+     */
     @Benchmark
-    public Order directParseOrder() {
+    public Order reflectiveDirectParseOrder() {
         return Bind.parse(orderBytes, Order.class, direct);
+    }
+
+    /**
+     * The GENERATED direct arm — the bridging elimination's proof side: construction is
+     * INVOKESPECIAL with stack-passed parameters, no args Object[], no constructor-path
+     * boxing. Its state registers the binder (the lazy registry hit), so the same facade
+     * call routes to the generated read.
+     */
+    @State(Scope.Benchmark)
+    public static class GeneratedState {
+        byte[] orderBytes;
+        BindConfig direct;
+
+        @Setup(Level.Iteration)
+        public void setup() {
+            orderBytes = ORDER_JSON.getBytes(StandardCharsets.UTF_8);
+            direct = BindConfig.defaults().withDirect();
+            GeneratedBinders.forType(Order.class);
+        }
+    }
+
+    @Benchmark
+    public Order generatedDirectParseOrder(GeneratedState state) {
+        return Bind.parse(state.orderBytes, Order.class, state.direct);
     }
 
     /** Disclosure: the default tree-path arm (the Node toll). */
