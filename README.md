@@ -121,17 +121,34 @@ Order direct = Bind.parse(jsonBytes, Order.class,
 assertEquals(treeParsed, direct);              // the two-arm gate: equal, always
 ```
 
-**Performance and allocation (measured honestly, 3 forks × 5×1s / -prof gc):** the direct
-path runs **1.94× and 2.05×** the tree-path reflective parse on the top-level POJO fixture
-across two independent measurement runs (the pinned ≥2× bar sits ON the line — straddled,
-not claimed) and **1.26–1.34×** on the whole-graph record fixture (the nested share dilutes
-the top-level speedup). Disclosure: the direct arm is **2.2–2.25× faster than Jackson
-databind on records** (where Afterburner is inert) and **1.5–1.6× the default facade path**;
-Jackson afterburner's field-level bytecode writes run 2.3× the direct arm on POJOs — the
-competitor ceiling. Allocation: **3624 B/op vs the tree path's 7448** — zero tree/Node
-objects (JFR allocation-profile verified), the remainder being the target graph, text
-materialization, and reflective-construction bridging (the generated direct binder's M7
-elimination list). The full graph through BOTH paths is the binding gate; reproduction:
+**M6 performance and allocation (measured honestly, 3 forks × 5×1s / -prof gc):** the
+reflective direct path ran **1.94× and 2.05×** the tree-path reflective parse on the
+top-level POJO fixture across two independent runs (the pinned ≥2× bar straddled, not
+claimed) and **1.26–1.34×** on the whole-graph record fixture. Allocation: **3624 B/op vs
+the tree path's 7448** — zero tree/Node objects (JFR-verified); the remainder being the
+target graph, text materialization, and reflective-construction bridging — the generated
+direct binder's M7 elimination list.
+
+**M7 trajectory (the generated direct read, two independent runs at final HEAD):** the
+pinned ≥2× bar is now **MET CLEARLY**: generated direct **2.61× / 2.60×** the tree-path
+reflective parse on the POJO judgment arm across two runs (2.116M / 2.125M vs 0.811M /
+0.817M ops/s; the worst-band edge still clears 2×) and **1.48× / 1.54×** on the whole-graph
+record. The honest headline is the FIFTH arm — the in-run A/B against the same M6
+reflective direct read — which **disconfirms M6's attribution hypothesis**: the reflective
+arm itself measures **2.099M / 2.156M** (parity, 1.01–1.02× the generated arm) and clears
+2× too — the bridging elimination is real on the allocation side (−136 B/op, below) but
+throughput-neutral; M6's 1.94× was cross-day machine drift, and the in-run A/B is the only
+trustworthy comparator. The 2.6× belongs to the direct-read architecture itself.
+Disclosure: Jackson afterburner's POJO ceiling stands at **1.82×** generated direct
+(contested, not matched); Jackson databind wins the whole-graph record at **1.92–1.95×**;
+the generated direct arm is **~2× the default facade path**. Allocation: reflective direct
+**3624 B/op** (reproduced exactly), generated direct **3488 B/op** — the eliminated
+**−136 B/op** matches the predicted args Object[10] + Long/Double constructor boxing, and
+the JFR class distribution shows the bridging classes **absent** from the generated arm
+(the Gen$ class live on its allocation stacks) against a 960 B/op target-graph baseline.
+The three-grade correctness matrix (tree reflective / reflective direct / generated
+direct: pairwise-equal values, pairwise-identical failures, byte-identical writes) is a
+standing gate. Reproduction:
 
 ```bash
 export JAVA_HOME=/path/to/jdk-21
@@ -140,15 +157,21 @@ $JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*DirectBindBenchmark.
 $JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*DirectBindAlloc.*" -prof gc -wi 5 -i 5 -f 3
 ```
 
-### Generated binders (jolt-gen, M4 + M5)
+### Generated binders (jolt-gen, M4 + M5 + M7)
 
 An optional module that runtime-generates a dedicated binder class per target type via
 ByteBuddy. Non-public targets fall back to the reflective binder. Since M5 the generated
 parse/write bodies are **straight-line per-component bytecode** — accessor/field-name
 constants baked in, strict tag checks with direct Node-reader calls, cached child binders for
-nested record/POJO components, construction via a pre-resolved method handle — no metadata
-arrays and no per-call property-name derivation in the hot loop. Records and POJOs both get
-the treatment; collection components route through the shared `Bind` dispatch unchanged.
+nested record/POJO components — no metadata arrays and no per-call property-name derivation
+in the hot loop. Since M7 the SAME generated class carries THREE forms on one instance: the
+tree `parse`, the **token-consuming direct read** (`parseTokens` — the field loop inline,
+strict scalar reads through the shared error helpers, and DIRECT construction: NEW +
+per-parameter stack passing + INVOKESPECIAL canonical, no args array, no constructor-path
+boxing) and `write`. The declaration is the capability flag: a record/POJO whose component
+types are all public and emittable gets the direct read; non-public component types keep
+the whole type on the reflective arm. Records and POJOs both get the treatment; collection
+components read through the shared Plan-driven value read (one door call per value).
 
 ```java
 import io.github.chutian0610.jolt.gen.GeneratedBinders;
