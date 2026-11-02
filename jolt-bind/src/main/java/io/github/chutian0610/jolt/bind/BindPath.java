@@ -40,6 +40,19 @@ final class BindPath {
         names[depth] = null;
     }
 
+    /** The segments pushed so far — an inline collection loop saves it at entry. */
+    int depth() {
+        return depth;
+    }
+
+    /** Pops back to {@code target}: the inline loops' error edge restores the position they
+     * entered with, whatever nested loops pushed in between (one handler, any nesting). */
+    void truncate(int target) {
+        while (depth > target) {
+            pop();
+        }
+    }
+
     /** The `$`-rooted path of the current position, assembled on demand (failure only). */
     String resolve() {
         StringBuilder sb = new StringBuilder("$");

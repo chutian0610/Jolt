@@ -42,22 +42,30 @@ import java.util.concurrent.TimeUnit;
  * inlining and the numeric text path on top. The reference arm never changes.
  *
  * <p><b>Measured at T1 — lever #1 only (Apple Silicon / Zulu 21, 3 forks × 5×1s, -prof gc,
- * 2026-11-02; committed per the calibration clause):</b> the baked chain removes EXACTLY the
- * dissection's #1 cost — POJO 800 → <b>464 B/op</b> (−336), graph 3488 → <b>1832 B/op</b>
- * (−1656), the ledger's chain line to the byte. In-run: POJO M8-on <b>3.376M ± 0.152M</b>
- * (296 ns — the dissection's ladder predicted 294) vs M8-off 2.158M ± 0.098M = <b>1.56×</b>;
- * vs afterburner 3.835M ± 0.156M = <b>0.88×</b> (T1 alone; the pinned 0.9× bar is T3's call
- * after T2's levers — the ladder projects ~240 ns ≈ parity). Graph M8-on
- * <b>0.763M ± 0.034M</b> vs M8-off 0.552M ± 0.029M = <b>1.38×</b> (T1 alone; the pinned
- * ≥ 1.5× bar awaits T2's collection inlining — projected ~1.6×); vs databind 0.922M ±
- * 0.040M = 0.83×. The facade arms equal the binder arms (the registry dispatch is free:
- * 3.324M / 0.756M). <b>Disclosure — the comparator moved too:</b> M8-off reads 3248 B/op,
- * not v0.7.1's 3488, because its {@code List<Item>} door enters the reflective Item body,
- * whose chain bakes FieldName keys as well (both grades, one rule) — the self-referential
- * ratio is conservative by construction, crediting only the generated BODY's change; T2's
- * inlining takes the M8 form off that door while the reference keeps it. Cross-run
- * (disclosure only): the same afterburner arm read 4.225M in the T0 run hours earlier —
- * ±10% intra-day drift, in-run ratios only.
+ * 2026-11-02):</b> the baked
+ * chain removed EXACTLY the dissection's #1 cost — POJO 800 → 464 B/op (−336), graph 3488 →
+ * 1832 B/op (−1656), the ledger's chain line to the byte. POJO M8-on 3.376M ± 0.152M
+ * (296 ns — the ladder predicted 294) = 1.56× M8-off / 0.88× afterburner; graph M8-on
+ * 0.763M ± 0.034M = 1.38× M8-off / 0.83× databind. Facade ≈ binder (the registry dispatch
+ * is free). Cross-run (disclosure only): the same afterburner arm read 4.225M in the T0 run
+ * hours earlier — ±10% intra-day drift, in-run ratios only.
+ *
+ * <p><b>Measured at T2 — the full lever set (#57: collection-loop inlining, the per-parse
+ * carrier, the parser-internal numeric text path; Apple Silicon / Zulu 21, 3 forks × 5×1s,
+ * -prof gc, 2026-11-02):</b> BOTH PINNED BARS CLEAR, and the graph contest flips. POJO
+ * M8-on <b>3.774M ± 0.052M</b> (265 ns) = <b>0.95× afterburner</b> (3.957M ± 0.032M; the
+ * pinned ≥ 0.9× MET; the 1.0× aspiration stays unreached — bands do not overlap) and
+ * <b>1.72×</b> M8-off (2.192M ± 0.043M); <b>392 B/op</b> (the numeric text path's −72 on
+ * top of T1's 464). Graph M8-on <b>0.950M ± 0.032M</b> (1052 ns) = <b>1.68× the M8-off arm</b>
+ * (0.565M ± 0.013M; the pinned ≥ 1.5× MET) and <b>1.02× Jackson databind</b> (0.933M ±
+ * 0.015M) — the whole-graph deficit (1.92–1.95× at v0.7.1) is GONE: bands overlap, the
+ * facade arm runs ahead (0.963M = 1.03×); <b>1352 B/op</b> (−480 from T1: the numeric text,
+ * the enum name, the reflective element bodies and their args Object[] all gone). The user
+ * path: facade 3.826M POJO / 0.963M graph. M8-off moved again (POJO 800 → 728, graph 3248 →
+ * 2832 B/op) — the shared substrate (parser numeric path, reflective element chains and
+ * bodies) improves under it; the self-referential ratio stays conservative by construction.
+ * The pinned bars are #58's adjudication (two independent runs at final HEAD); this is the
+ * T2 tracer's one run.
  *
  * <p>Reproduce: {@code ./gradlew :jolt-bench:jmhJar} then
  * {@code java -jar jolt-bench/build/libs/*-jmh.jar ".*M8Tracer.*" -prof gc -wi 5 -i 5 -f 3}.

@@ -64,6 +64,8 @@ final class Emit {
     static final String CHILD_FIELD_PREFIX = "jolt$child$";
     static final String TYPE_FIELD_PREFIX = "jolt$type$";
     static final String FIELD_NAME_FIELD_PREFIX = "jolt$fn$";
+    /** The baked binder for a CHILD element inside an inlined collection (the M8 form). */
+    static final String ELEMENT_CHILD_FIELD_PREFIX = "jolt$elemchild$";
 
     private Emit() {}
 

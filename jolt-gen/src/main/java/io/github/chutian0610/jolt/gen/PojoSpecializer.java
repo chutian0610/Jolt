@@ -132,6 +132,20 @@ final class PojoSpecializer {
                 + accessorName.substring(prefix + 1);
     }
 
+    /** The per-component inline shapes (null = the door), computed once per generated
+     * class; the reference form inlines nothing. */
+    private static InlineCollections.Shape[] inlineShapes(GenPlan<?> plan, boolean referenceForm) {
+        InlineCollections.Shape[] shapes = new InlineCollections.Shape[plan.setters.size()];
+        if (!referenceForm) {
+            for (int i = 0; i < plan.setters.size(); i++) {
+                if (kindOf(rawOf(componentType(plan, i))) == Emit.Kind.GENERIC) {
+                    shapes[i] = InlineCollections.decompose(componentType(plan, i));
+                }
+            }
+        }
+        return shapes;
+    }
+
     /** Adds the specialized fields and straight-line overrides to the generated class. The
      * {@code referenceForm} (M8-off, the gate's comparator) emits the M7-form body: the
      * String-name chain — the frozen {@code fieldNameEquals(String)} overload — while the
@@ -139,6 +153,9 @@ final class PojoSpecializer {
     static DynamicType.Builder<?> apply(DynamicType.Builder<?> builder, String generatedName,
                                         GenPlan<?> plan, boolean referenceForm) {
         String self = generatedName.replace('.', '/');
+        // the inline-vs-door decision per collection component, made ONCE here and shared
+        // by the field definitions, jolt$initChildren and the direct-read bodies
+        InlineCollections.Shape[] shapes = inlineShapes(plan, referenceForm);
         builder = builder.defineField(RecordSpecializer.NAME_SET_FIELD, java.util.Set.class,
                 Visibility.PUBLIC);
         if (isDirectCapable(plan.type) && !referenceForm) {
@@ -153,8 +170,16 @@ final class PojoSpecializer {
             switch (kindOf(raw)) {
                 case CHILD -> builder = builder.defineField(CHILD_FIELD_PREFIX + i,
                         TypedBinder.class, Visibility.PUBLIC);
-                case GENERIC -> builder = builder.defineField(TYPE_FIELD_PREFIX + i,
-                        java.lang.reflect.Type.class, Visibility.PUBLIC);
+                case GENERIC -> {
+                    builder = builder.defineField(TYPE_FIELD_PREFIX + i,
+                            java.lang.reflect.Type.class, Visibility.PUBLIC);
+                    // an inline collection with child elements bakes the element's binder
+                    // (the monomorphic call inside the inlined loop, the M8 form only)
+                    if (shapes[i] != null && InlineCollections.childOf(shapes[i]) != null) {
+                        builder = builder.defineField(Emit.ELEMENT_CHILD_FIELD_PREFIX + i,
+                                TypedBinder.class, Visibility.PUBLIC);
+                    }
+                }
                 default -> { /* scalars bake no fields */ }
             }
         }
@@ -173,7 +198,7 @@ final class PojoSpecializer {
                 .intercept(new Implementation.Simple(new CheckUnknownBody(self)))
                 .defineMethod(RecordSpecializer.INIT_CHILDREN_METHOD, void.class, Visibility.PUBLIC)
                 .intercept(new Implementation.Simple(
-                        new InitChildrenBody(self, plan, referenceForm)));
+                        new InitChildrenBody(self, plan, referenceForm, shapes)));
         if (isDirectCapable(plan.type)) {
             // the direct forms: the document root and the nested body (the caller consumed
             // this value's START_OBJECT), plus the capability flag the facade consults
@@ -182,12 +207,12 @@ final class PojoSpecializer {
                             Visibility.PUBLIC)
                     .withParameters(io.github.chutian0610.jolt.JoltParser.class, BindConfig.class)
                     .intercept(new Implementation.Simple(
-                            new ParseTokensBody(self, plan, false, referenceForm)))
+                            new ParseTokensBody(self, plan, false, referenceForm, shapes)))
                     .defineMethod(RecordSpecializer.PARSE_TOKENS_BODY_METHOD, Object.class,
                             Visibility.PUBLIC)
                     .withParameters(io.github.chutian0610.jolt.JoltParser.class, BindConfig.class)
                     .intercept(new Implementation.Simple(
-                            new ParseTokensBody(self, plan, true, referenceForm)))
+                            new ParseTokensBody(self, plan, true, referenceForm, shapes)))
                     .defineMethod(RecordSpecializer.HAS_DIRECT_READ_METHOD, boolean.class,
                             Visibility.PUBLIC)
                     .intercept(new Implementation.Simple(
@@ -602,24 +627,56 @@ final class PojoSpecializer {
         private final String pojoInternal;
         private final boolean nested;
         private final boolean referenceForm;
+        private final InlineCollections.Shape[] inline;
+        private final int loopsDepth;
 
         /** {@code nested} selects the body form: the caller consumed this value's
          * START_OBJECT and owns the path position and the drain. The {@code referenceForm}
-         * (M8-off, the gate comparator) keeps the M7 String-name chain; the main form uses
-         * the baked FieldName keys. */
-        ParseTokensBody(String self, GenPlan<?> plan, boolean nested, boolean referenceForm) {
+         * (M8-off, the gate comparator) keeps the M7 String chain, the per-field ThreadLocal
+         * path access and the door calls; the M8 form resolves the carrier once per body
+         * and inlines the collection loops ({@code inline}: the per-component decision,
+         * null = the door). */
+        ParseTokensBody(String self, GenPlan<?> plan, boolean nested, boolean referenceForm,
+                        InlineCollections.Shape[] inline) {
             this.self = self;
             this.plan = plan;
             this.pojoInternal = internal(plan.type);
             this.nested = nested;
             this.referenceForm = referenceForm;
+            this.inline = inline;
+            int depth = 0;
+            for (InlineCollections.Shape shape : inline) {
+                if (shape != null) {
+                    depth = Math.max(depth, InlineCollections.depthOf(shape));
+                }
+            }
+            this.loopsDepth = depth;
+        }
+
+        /** The M8 form's trailing locals: the carrier, the saved path depth, and the inline
+         * loops' scratch (3 cells per loop depth, all width 1). */
+        private int extraLocals() {
+            return referenceForm ? 0 : 2 + InlineCollections.CELLS_PER_DEPTH * loopsDepth;
+        }
+
+        private int carrierSlot() {
+            return INSTANCE + 1;
+        }
+
+        private int componentDepthSlot() {
+            return INSTANCE + 2;
+        }
+
+        private int scratchSlot() {
+            return INSTANCE + 3;
         }
 
         @Override
         public Size apply(MethodVisitor mv, Implementation.Context context,
                           MethodDescription instrumentedMethod) {
             int n = plan.setters.size();
-            Object[] frameLocals = new Object[INSTANCE + 1];
+            int extra = extraLocals();
+            Object[] frameLocals = new Object[INSTANCE + 1 + extra];
             frameLocals[1] = PARSER;
             frameLocals[2] = internal(BindConfig.class);
             frameLocals[ERRORS] = "[Ljava/lang/Object;";
@@ -634,6 +691,16 @@ final class PojoSpecializer {
             // pre-construction snapshot below — the tracker holds the array by
             // reference, so order matters
             frameLocals[INSTANCE] = Opcodes.TOP;
+            if (extra > 0) {
+                frameLocals[carrierSlot()] = "java/lang/Object";
+                frameLocals[componentDepthSlot()] = Opcodes.INTEGER;
+                for (int d = 0; d < loopsDepth; d++) {
+                    int cell = scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH;
+                    frameLocals[cell] = "java/lang/Object";
+                    frameLocals[cell + 1] = Opcodes.INTEGER;
+                    frameLocals[cell + 2] = "java/lang/Object";
+                }
+            }
             Emit.FrameTracker slots = new Emit.FrameTracker(self, frameLocals);
 
             Label loopHead = new Label();
@@ -643,10 +710,33 @@ final class PojoSpecializer {
 
             // entry: the root form resets the shared path; both read the root token and
             // construct the default instance (the POJO construction is unconditional —
-            // absent properties stay default)
+            // absent properties stay default). The M8 form resolves the carrier ONCE per
+            // parse (the reference form re-resolves it per pushName/pop, the frozen M7 shape)
             if (!nested) {
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetPath", "()V",
-                        false);
+                if (referenceForm) {
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetPath",
+                            "()V", false);
+                } else {
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetCarrier",
+                            "()Ljava/lang/Object;", false);
+                    mv.visitVarInsn(Opcodes.ASTORE, carrierSlot());
+                }
+            } else if (!referenceForm) {
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "takeCarrier",
+                        "()Ljava/lang/Object;", false);
+                mv.visitVarInsn(Opcodes.ASTORE, carrierSlot());
+            }
+            if (extra > 0) {
+                mv.visitInsn(Opcodes.ICONST_0);
+                mv.visitVarInsn(Opcodes.ISTORE, componentDepthSlot());
+                for (int d = 0; d < loopsDepth; d++) {
+                    mv.visitInsn(Opcodes.ACONST_NULL);
+                    mv.visitVarInsn(Opcodes.ASTORE, scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH);
+                    mv.visitInsn(Opcodes.ICONST_0);
+                    mv.visitVarInsn(Opcodes.ISTORE, scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH + 1);
+                    mv.visitInsn(Opcodes.ACONST_NULL);
+                    mv.visitVarInsn(Opcodes.ASTORE, scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH + 2);
+                }
             }
             mv.visitVarInsn(Opcodes.ALOAD, 1);
             mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
@@ -775,7 +865,7 @@ final class PojoSpecializer {
                 mv.visitInsn(Opcodes.ARETURN);
             }
 
-            return new Size(10, INSTANCE + 1);
+            return new Size(10, INSTANCE + 1 + extraLocals());
         }
 
         /** One matched property: path push, the guarded value read + setter invoke, the
@@ -789,9 +879,22 @@ final class PojoSpecializer {
             Label tryEnd = new Label();
             Label join = new Label();
             Label handler = new Label();
-            mv.visitLdcInsn(setterKey(plan.setters.get(i)));
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
-                    "(Ljava/lang/String;)V", false);
+            if (referenceForm) {
+                mv.visitLdcInsn(setterKey(plan.setters.get(i)));
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
+                        "(Ljava/lang/String;)V", false);
+            } else {
+                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
+                mv.visitLdcInsn(setterKey(plan.setters.get(i)));
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
+                        "(Ljava/lang/Object;Ljava/lang/String;)V", false);
+            }
+            if (inline[i] != null) {
+                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "carrierDepth",
+                        "(Ljava/lang/Object;)I", false);
+                mv.visitVarInsn(Opcodes.ISTORE, componentDepthSlot());
+            }
             mv.visitVarInsn(Opcodes.ALOAD, 1);
             mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
                     PARSER_NEXT_TOKEN_DESC, true);
@@ -806,6 +909,16 @@ final class PojoSpecializer {
             mv.visitLabel(handler);
             slots.emit(mv, BIND_EXCEPTION);
             mv.visitVarInsn(Opcodes.ASTORE, THROWABLE);
+            if (inline[i] != null) {
+                // the failure may have left the cursor inside the inlined containers —
+                // drain exactly as many closers as segments the loops pushed, restore the
+                // carrier (the door's #61 recovery, one handler for any nesting)
+                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
+                mv.visitVarInsn(Opcodes.ILOAD, componentDepthSlot());
+                mv.visitVarInsn(Opcodes.ALOAD, 1);
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "recoverCollection",
+                        "(Ljava/lang/Object;ILio/github/chutian0610/jolt/JoltParser;)V", false);
+            }
             mv.visitVarInsn(Opcodes.ALOAD, ERRORS);
             pushIndex(mv, i);
             mv.visitVarInsn(Opcodes.ALOAD, THROWABLE);
@@ -817,7 +930,13 @@ final class PojoSpecializer {
 
             mv.visitLabel(join);
             slots.emit(mv);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop", "()V", false);
+            if (referenceForm) {
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop", "()V", false);
+            } else {
+                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop",
+                        "(Ljava/lang/Object;)V", false);
+            }
             mv.visitJumpInsn(Opcodes.GOTO, loopHead);
         }
 
@@ -1023,10 +1142,20 @@ final class PojoSpecializer {
             mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
         }
 
-        /** Collections/maps/untyped: the shared Plan-driven read through the door — ONE
-         * call for the whole value; the element Type is the parent's baked field. */
+        /** Collections/maps/untyped: a decomposable shape emits its loop INLINE (the M8
+         * form — {@link InlineCollections}); everything else delegates to the shared
+         * Plan-driven read through the door — ONE call for the whole value; the element
+         * Type is the parent's baked field. */
         private void emitGenericValue(MethodVisitor mv, Emit.FrameTracker slots, int i,
                                       Class<?> raw, Object[] stackBase) {
+            if (inline[i] != null) {
+                InlineCollections.emit(mv,
+                        new InlineCollections.Body(self, VALUE_TOKEN, TEXT, carrierSlot(),
+                                scratchSlot(), slots),
+                        inline[i], i, stackBase);
+                mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
+                return;
+            }
             mv.visitVarInsn(Opcodes.ALOAD, 1);
             mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
             mv.visitVarInsn(Opcodes.ALOAD, 0);
@@ -1315,11 +1444,14 @@ final class PojoSpecializer {
         private final String self;
         private final GenPlan<?> plan;
         private final boolean referenceForm;
+        private final InlineCollections.Shape[] inline;
 
-        InitChildrenBody(String self, GenPlan<?> plan, boolean referenceForm) {
+        InitChildrenBody(String self, GenPlan<?> plan, boolean referenceForm,
+                         InlineCollections.Shape[] inline) {
             this.self = self;
             this.plan = plan;
             this.referenceForm = referenceForm;
+            this.inline = inline;
         }
 
         @Override
@@ -1337,6 +1469,15 @@ final class PojoSpecializer {
                             "(Ljava/lang/Class;)" + TYPED_BINDER_FIELD_DESC, false);
                     mv.visitFieldInsn(Opcodes.PUTFIELD, self, CHILD_FIELD_PREFIX + i,
                             TYPED_BINDER_FIELD_DESC);
+                } else if (inline[i] != null && InlineCollections.childOf(inline[i]) != null) {
+                    // the inlined loop's element child (the M8 form only — shapes are null
+                    // in the reference form)
+                    mv.visitVarInsn(Opcodes.ALOAD, 0);
+                    mv.visitLdcInsn(Type.getType(InlineCollections.childOf(inline[i])));
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, Emit.GENERATED_INTERNAL,
+                            "forType", "(Ljava/lang/Class;)" + TYPED_BINDER_FIELD_DESC, false);
+                    mv.visitFieldInsn(Opcodes.PUTFIELD, self,
+                            Emit.ELEMENT_CHILD_FIELD_PREFIX + i, TYPED_BINDER_FIELD_DESC);
                 }
             }
             mv.visitInsn(Opcodes.RETURN);

@@ -108,6 +108,20 @@ final class RecordSpecializer {
         return isDirectCapable(plan.type);
     }
 
+    /** The per-component inline shapes (null = the door), computed once per generated
+     * class; the reference form inlines nothing. */
+    private static InlineCollections.Shape[] inlineShapes(GenPlan<?> plan, boolean referenceForm) {
+        InlineCollections.Shape[] shapes = new InlineCollections.Shape[plan.names.length];
+        if (!referenceForm) {
+            for (int i = 0; i < plan.names.length; i++) {
+                if (kindOf(rawOf(plan.genericTypes[i])) == Emit.Kind.GENERIC) {
+                    shapes[i] = InlineCollections.decompose(plan.genericTypes[i]);
+                }
+            }
+        }
+        return shapes;
+    }
+
     static boolean kindEmittable(Class<?> raw) {
         // the emitted bytecode NAMES every reference component type — LDC class constants
         // and CHECKCASTs resolve from the generated class's runtime package, so a
@@ -130,6 +144,9 @@ final class RecordSpecializer {
                                         GenPlan<?> plan, boolean referenceForm) {
         String self = generatedName.replace('.', '/');
         boolean direct = isDirectCapable(plan);
+        // the inline-vs-door decision per collection component, made ONCE here and shared
+        // by the field definitions, jolt$initChildren and the direct-read bodies
+        InlineCollections.Shape[] shapes = inlineShapes(plan, referenceForm);
         builder = builder.defineField(NAME_SET_FIELD, java.util.Set.class, Visibility.PUBLIC);
         builder = builder.defineField(HANDLE_FIELD, java.lang.invoke.MethodHandle.class,
                 Visibility.PUBLIC);
@@ -150,8 +167,16 @@ final class RecordSpecializer {
             switch (kindOf(raw)) {
                 case CHILD -> builder = builder.defineField(CHILD_FIELD_PREFIX + i,
                         TypedBinder.class, Visibility.PUBLIC);
-                case GENERIC -> builder = builder.defineField(TYPE_FIELD_PREFIX + i,
-                        java.lang.reflect.Type.class, Visibility.PUBLIC);
+                case GENERIC -> {
+                    builder = builder.defineField(TYPE_FIELD_PREFIX + i,
+                            java.lang.reflect.Type.class, Visibility.PUBLIC);
+                    // an inline collection with child elements bakes the element's binder
+                    // (the monomorphic call inside the inlined loop, the M8 form only)
+                    if (shapes[i] != null && InlineCollections.childOf(shapes[i]) != null) {
+                        builder = builder.defineField(Emit.ELEMENT_CHILD_FIELD_PREFIX + i,
+                                TypedBinder.class, Visibility.PUBLIC);
+                    }
+                }
                 default -> { /* scalars bake no fields */ }
             }
         }
@@ -170,7 +195,7 @@ final class RecordSpecializer {
                 .intercept(new Implementation.Simple(new CheckUnknownBody(self)))
                 .defineMethod(INIT_CHILDREN_METHOD, void.class, Visibility.PUBLIC)
                 .intercept(new Implementation.Simple(
-                        new InitChildrenBody(self, plan, referenceForm)));
+                        new InitChildrenBody(self, plan, referenceForm, shapes)));
         if (direct) {
             // the third form: the token-consuming direct read (the document root), its
             // nested body form (the caller consumed this value's START_OBJECT), and the
@@ -179,11 +204,11 @@ final class RecordSpecializer {
                     .defineMethod(PARSE_TOKENS_METHOD, Object.class, Visibility.PUBLIC)
                     .withParameters(JoltParser.class, BindConfig.class)
                     .intercept(new Implementation.Simple(
-                            new ParseTokensBody(self, plan, false, referenceForm)))
+                            new ParseTokensBody(self, plan, false, referenceForm, shapes)))
                     .defineMethod(PARSE_TOKENS_BODY_METHOD, Object.class, Visibility.PUBLIC)
                     .withParameters(JoltParser.class, BindConfig.class)
                     .intercept(new Implementation.Simple(
-                            new ParseTokensBody(self, plan, true, referenceForm)))
+                            new ParseTokensBody(self, plan, true, referenceForm, shapes)))
                     .defineMethod(HAS_DIRECT_READ_METHOD, boolean.class, Visibility.PUBLIC)
                     .intercept(new Implementation.Simple(
                             (mv, context, method) -> {
@@ -580,22 +605,35 @@ final class RecordSpecializer {
         private final boolean hasPrimitives;
         private final boolean nested;
         private final boolean referenceForm;
+        private final InlineCollections.Shape[] inline;
+        private final int loopsDepth;
 
         /** {@code nested} selects the body form: the caller consumed this value's
          * START_OBJECT and owns the path position and the drain — no path reset, no root
          * dispatch, no tail drain. The {@code referenceForm} (M8-off, the gate comparator)
-         * keeps the M7 String-name chain; the main form uses the baked FieldName keys. */
-        ParseTokensBody(String self, GenPlan<?> plan, boolean nested, boolean referenceForm) {
+         * keeps the M7 String chain, the per-field ThreadLocal path access and the door
+         * calls; the M8 form resolves the carrier once per body and inlines the collection
+         * loops ({@code inline}: the per-component decision, null = the door). */
+        ParseTokensBody(String self, GenPlan<?> plan, boolean nested, boolean referenceForm,
+                        InlineCollections.Shape[] inline) {
             this.self = self;
             this.plan = plan;
             this.recordInternal = internal(plan.type);
             this.nested = nested;
             this.referenceForm = referenceForm;
+            this.inline = inline;
             boolean any = false;
             for (java.lang.reflect.Type genericType : plan.genericTypes) {
                 any |= rawOf(genericType).isPrimitive();
             }
             this.hasPrimitives = any;
+            int depth = 0;
+            for (InlineCollections.Shape shape : inline) {
+                if (shape != null) {
+                    depth = Math.max(depth, InlineCollections.depthOf(shape));
+                }
+            }
+            this.loopsDepth = depth;
         }
 
         /** One local for most values; primitive long/double take two (boxed widths are refs). */
@@ -613,6 +651,24 @@ final class RecordSpecializer {
 
         private int maxLocals() {
             return slotOf(plan.names.length);
+        }
+
+        /** The M8 form's trailing locals: the carrier, the component's saved path depth,
+         * and the inline loops' scratch (3 cells per loop depth, all width 1). */
+        private int extraLocals() {
+            return referenceForm ? 0 : 2 + InlineCollections.CELLS_PER_DEPTH * loopsDepth;
+        }
+
+        private int carrierSlot() {
+            return maxLocals();
+        }
+
+        private int componentDepthSlot() {
+            return maxLocals() + 1;
+        }
+
+        private int scratchSlot() {
+            return maxLocals() + 2;
         }
 
         /** The FrameTracker declaration for a component value's local slot. */
@@ -637,10 +693,11 @@ final class RecordSpecializer {
         public Size apply(MethodVisitor mv, Implementation.Context context,
                           MethodDescription instrumentedMethod) {
             int n = plan.names.length;
+            int extra = extraLocals();
             // the frame's locals declaration, COMPACT — one cell per value (ASM fills the
             // second slot of a LONG/DOUBLE cell itself; an explicit TOP there would shift
             // every later cell and corrupt the serialized StackMapTable)
-            Object[] frameLocals = new Object[FIRST_COMPONENT + n];
+            Object[] frameLocals = new Object[FIRST_COMPONENT + n + extra];
             frameLocals[1] = PARSER;
             frameLocals[2] = internal(BindConfig.class);
             frameLocals[SEEN] = "[Z";
@@ -654,6 +711,16 @@ final class RecordSpecializer {
             for (int i = 0; i < n; i++) {
                 frameLocals[FIRST_COMPONENT + i] = frameType(rawOf(plan.genericTypes[i]));
             }
+            if (extra > 0) {
+                frameLocals[FIRST_COMPONENT + n] = "java/lang/Object";     // the carrier
+                frameLocals[FIRST_COMPONENT + n + 1] = Opcodes.INTEGER;    // the saved depth
+                for (int d = 0; d < loopsDepth; d++) {
+                    int cell = FIRST_COMPONENT + n + 2 + d * InlineCollections.CELLS_PER_DEPTH;
+                    frameLocals[cell] = "java/lang/Object";
+                    frameLocals[cell + 1] = Opcodes.INTEGER;
+                    frameLocals[cell + 2] = "java/lang/Object";
+                }
+            }
             Emit.FrameTracker slots = new Emit.FrameTracker(self, frameLocals);
 
             Label loopHead = new Label();
@@ -662,10 +729,34 @@ final class RecordSpecializer {
             Label drained = new Label();
 
             // entry: the root form resets the shared path (the nested form inherits the
-            // caller's path position); both zero the pooled seen flags and default every slot
+            // caller's path position); both zero the pooled seen flags and default every
+            // slot. The M8 form resolves the carrier ONCE per parse (one ThreadLocal lookup
+            // — the reference form re-resolves it per pushName/pop, the frozen M7 shape)
             if (!nested) {
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetPath", "()V",
-                        false);
+                if (referenceForm) {
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetPath",
+                            "()V", false);
+                } else {
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetCarrier",
+                            "()Ljava/lang/Object;", false);
+                    mv.visitVarInsn(Opcodes.ASTORE, carrierSlot());
+                }
+            } else if (!referenceForm) {
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "takeCarrier",
+                        "()Ljava/lang/Object;", false);
+                mv.visitVarInsn(Opcodes.ASTORE, carrierSlot());
+            }
+            if (extra > 0) {
+                mv.visitInsn(Opcodes.ICONST_0);
+                mv.visitVarInsn(Opcodes.ISTORE, componentDepthSlot());
+                for (int d = 0; d < loopsDepth; d++) {
+                    mv.visitInsn(Opcodes.ACONST_NULL);
+                    mv.visitVarInsn(Opcodes.ASTORE, scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH);
+                    mv.visitInsn(Opcodes.ICONST_0);
+                    mv.visitVarInsn(Opcodes.ISTORE, scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH + 1);
+                    mv.visitInsn(Opcodes.ACONST_NULL);
+                    mv.visitVarInsn(Opcodes.ASTORE, scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH + 2);
+                }
             }
             pushIndex(mv, n);
             mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "takeSeen", "(I)[Z", false);
@@ -834,11 +925,13 @@ final class RecordSpecializer {
             for (int i = 0; i < n; i++) {
                 widths += slotWidth(rawOf(plan.genericTypes[i]));
             }
-            return new Size(Math.max(10, 2 + widths), maxLocals());
+            return new Size(Math.max(10, 2 + widths), maxLocals() + extraLocals());
         }
 
         /** One matched component: seen flag, path push, the guarded read, the shared slot
-         * note on failure, the path pop — then back to the field loop. */
+         * note on failure, the path pop — then back to the field loop. The M8 form threads
+         * the resolved carrier and, for an inlined collection, saves the path depth after
+         * the push so its handler can recover the cursor and the carrier in one call. */
         private void emitComponent(MethodVisitor mv, Emit.FrameTracker slots, int i,
                                    Label matched, int n, Label loopHead) {
             Class<?> raw = rawOf(plan.genericTypes[i]);
@@ -854,9 +947,22 @@ final class RecordSpecializer {
             pushIndex(mv, i);
             mv.visitInsn(Opcodes.ICONST_1);
             mv.visitInsn(Opcodes.BASTORE);
-            mv.visitLdcInsn(plan.names[i]);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
-                    "(Ljava/lang/String;)V", false);
+            if (referenceForm) {
+                mv.visitLdcInsn(plan.names[i]);
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
+                        "(Ljava/lang/String;)V", false);
+            } else {
+                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
+                mv.visitLdcInsn(plan.names[i]);
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
+                        "(Ljava/lang/Object;Ljava/lang/String;)V", false);
+            }
+            if (inline[i] != null) {
+                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "carrierDepth",
+                        "(Ljava/lang/Object;)I", false);
+                mv.visitVarInsn(Opcodes.ISTORE, componentDepthSlot());
+            }
             mv.visitVarInsn(Opcodes.ALOAD, 1);
             mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
                     PARSER_NEXT_TOKEN_DESC, true);
@@ -871,6 +977,16 @@ final class RecordSpecializer {
             mv.visitLabel(handler);
             slots.emit(mv, BIND_EXCEPTION);
             mv.visitVarInsn(Opcodes.ASTORE, THROWABLE);
+            if (inline[i] != null) {
+                // the failure may have left the cursor inside the inlined containers —
+                // drain exactly as many closers as segments the loops pushed, restore the
+                // carrier (the door's #61 recovery, one handler for any nesting)
+                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
+                mv.visitVarInsn(Opcodes.ILOAD, componentDepthSlot());
+                mv.visitVarInsn(Opcodes.ALOAD, 1);
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "recoverCollection",
+                        "(Ljava/lang/Object;ILio/github/chutian0610/jolt/JoltParser;)V", false);
+            }
             mv.visitVarInsn(Opcodes.ALOAD, ERRORS);
             pushIndex(mv, i);
             mv.visitVarInsn(Opcodes.ALOAD, THROWABLE);
@@ -882,7 +998,13 @@ final class RecordSpecializer {
 
             mv.visitLabel(join);
             slots.emit(mv);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop", "()V", false);
+            if (referenceForm) {
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop", "()V", false);
+            } else {
+                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop",
+                        "(Ljava/lang/Object;)V", false);
+            }
             mv.visitJumpInsn(Opcodes.GOTO, loopHead);
         }
 
@@ -1037,14 +1159,24 @@ final class RecordSpecializer {
         }
 
         /**
-         * Collections, maps, arrays, and untyped Object: the value read delegates to the
-         * shared Plan-driven read through the door — ONE call for the whole value (the
-         * element loops live in the reflective machinery, on the same parser stream). The
-         * element Type is the parent's baked field; polymorphic shapes raise their shared
-         * rejection inside the door.
+         * Collections, maps, arrays, and untyped Object: a decomposable shape emits its
+         * loop INLINE (the M8 form — {@link InlineCollections}); everything else delegates
+         * to the shared Plan-driven read through the door — ONE call for the whole value.
+         * The element Type is the parent's baked field; polymorphic shapes raise their
+         * shared rejection inside the door.
          */
         private void emitGenericRead(MethodVisitor mv, Emit.FrameTracker slots, int i,
                                      Class<?> raw, int slot, Label tryEnd) {
+            if (inline[i] != null) {
+                InlineCollections.emit(mv,
+                        new InlineCollections.Body(self, VALUE_TOKEN, TEXT, carrierSlot(),
+                                scratchSlot(), slots),
+                        inline[i], i, new Object[0]);
+                mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
+                mv.visitVarInsn(Opcodes.ASTORE, slot);
+                mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
+                return;
+            }
             mv.visitVarInsn(Opcodes.ALOAD, 1);
             mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
             mv.visitVarInsn(Opcodes.ALOAD, 0);
@@ -1368,11 +1500,14 @@ final class RecordSpecializer {
         private final String self;
         private final GenPlan<?> plan;
         private final boolean referenceForm;
+        private final InlineCollections.Shape[] inline;
 
-        InitChildrenBody(String self, GenPlan<?> plan, boolean referenceForm) {
+        InitChildrenBody(String self, GenPlan<?> plan, boolean referenceForm,
+                         InlineCollections.Shape[] inline) {
             this.self = self;
             this.plan = plan;
             this.referenceForm = referenceForm;
+            this.inline = inline;
         }
 
         @Override
@@ -1390,6 +1525,15 @@ final class RecordSpecializer {
                             "(Ljava/lang/Class;)" + TYPED_BINDER_FIELD_DESC, false);
                     mv.visitFieldInsn(Opcodes.PUTFIELD, self, CHILD_FIELD_PREFIX + i,
                             TYPED_BINDER_FIELD_DESC);
+                } else if (inline[i] != null && InlineCollections.childOf(inline[i]) != null) {
+                    // the inlined loop's element child (the M8 form only — shapes are null
+                    // in the reference form)
+                    mv.visitVarInsn(Opcodes.ALOAD, 0);
+                    mv.visitLdcInsn(Type.getType(InlineCollections.childOf(inline[i])));
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, Emit.GENERATED_INTERNAL,
+                            "forType", "(Ljava/lang/Class;)" + TYPED_BINDER_FIELD_DESC, false);
+                    mv.visitFieldInsn(Opcodes.PUTFIELD, self,
+                            Emit.ELEMENT_CHILD_FIELD_PREFIX + i, TYPED_BINDER_FIELD_DESC);
                 }
             }
             mv.visitInsn(Opcodes.RETURN);

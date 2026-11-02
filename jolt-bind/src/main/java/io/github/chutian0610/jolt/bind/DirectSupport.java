@@ -86,6 +86,81 @@ public final class DirectSupport {
         }
     }
 
+    // --- the per-parse carrier (the M8 generated body: ONE ThreadLocal lookup per parse) ---
+
+    /**
+     * The thread's path carrier, reset for a new document root and handed to the generated
+     * body as an opaque handle: the M8 body resolves it ONCE per parse and threads it through
+     * its field and element loops, where the M7 body re-resolved the ThreadLocal on every
+     * {@link #pushName(String)}/{@link #pop()} — the dissection's machinery cost (#55, #57).
+     * Opaque because the generated class cannot name the package-private carrier type.
+     */
+    public static Object resetCarrier() {
+        BindPath path = STATE.get().path;
+        path.reset();
+        return path;
+    }
+
+    /** The thread's carrier at its current position — the nested body form (the caller
+     * owns the position). */
+    public static Object takeCarrier() {
+        return STATE.get().path;
+    }
+
+    /** Pushes a field name onto the given carrier. */
+    public static void pushName(Object carrier, String name) {
+        ((BindPath) carrier).pushName(name);
+    }
+
+    /** Pushes an element index onto the given carrier (the inline collection loops). */
+    public static void pushIndex(Object carrier, int index) {
+        ((BindPath) carrier).pushIndex(index);
+    }
+
+    /** Pops the given carrier's current segment. */
+    public static void pop(Object carrier) {
+        ((BindPath) carrier).pop();
+    }
+
+    /** The carrier's depth — an inline collection loop saves it at entry. */
+    public static int carrierDepth(Object carrier) {
+        return ((BindPath) carrier).depth();
+    }
+
+    /** Pops the carrier back to {@code depth}: the inline loops' error edge, restoring the
+     * entry position whatever nested loops pushed (the door's {@code finally} pops, mirrored
+     * for any nesting with one handler). */
+    public static void truncateCarrier(Object carrier, int depth) {
+        ((BindPath) carrier).truncate(depth);
+    }
+
+    /**
+     * The M8 inline loops' error edge, from the component handler: every segment the loops
+     * pushed above {@code savedDepth} is one container the failure left the cursor inside of
+     * (an index per list/array level, a key per map level — a child element's body pops its
+     * own segments before its sweep raises), so drain exactly that many closers, then
+     * restore the carrier. A failure outside any loop (depth unchanged) drains nothing.
+     */
+    public static void recoverCollection(Object carrier, int savedDepth, JoltParser p) {
+        BindPath path = (BindPath) carrier;
+        int inside = path.depth() - savedDepth;
+        if (inside > 0) {
+            drainContainer(p, inside);
+        }
+        path.truncate(savedDepth);
+    }
+
+    /** The array scratch pool, for the generated inline array loops (the door's own
+     * {@code readArray} takes it through the package-private twins). */
+    public static Object[] takeArrayScratch() {
+        return STATE.get().takeBuffer();
+    }
+
+    /** Returns the array scratch (element references released by the caller). */
+    public static void returnArrayScratch(Object[] buffer) {
+        STATE.get().returnBuffer(buffer);
+    }
+
     /** The seen-flag scratch: pooled per-thread (nesting takes its own array). The caller
      * zeroes the array before use — pooled content is stale by design. */
     public static boolean[] takeSeen(int length) {

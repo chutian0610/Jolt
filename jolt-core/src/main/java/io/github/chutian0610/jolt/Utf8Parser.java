@@ -499,10 +499,26 @@ public final class Utf8Parser implements JoltParser {
         return Double.parseDouble(numberText());
     }
 
-    /** The most recent number as an exact {@link BigDecimal}. */
+    /**
+     * The most recent number as an exact {@link BigDecimal}, parsed from the span through a
+     * reused char scratch — {@code new BigDecimal(String)} is {@code BigDecimal(char[])} over
+     * {@code toCharArray()} internally, so this is the same parse minus the String and the
+     * copy (the M8-T2 numeric text path, #57: the number text was ~370 B/op of the
+     * whole-graph read's materialization). A number span is ASCII by the grammar, so the
+     * byte→char widening is exact.
+     */
     public BigDecimal bigDecimalValue() {
-        return new BigDecimal(numberText());
+        int len = valueEnd - valueStart;
+        if (numberScratch == null || numberScratch.length < len) {
+            numberScratch = new char[Math.max(len, 32)];
+        }
+        for (int i = 0; i < len; i++) {
+            numberScratch[i] = (char) json[valueStart + i];
+        }
+        return new BigDecimal(numberScratch, 0, len);
     }
+
+    private char[] numberScratch;
 
     /** Dry-runs the in-place accumulation to test long range without exception control flow. */
     private boolean fitsInLong() {

@@ -476,9 +476,14 @@ public final class Utf16Parser implements JoltParser {
         return Double.parseDouble(numberText());
     }
 
-    /** The most recent number as an exact {@link BigDecimal}. */
+    /**
+     * The most recent number as an exact {@link BigDecimal}, parsed in place from the char
+     * span — {@code new BigDecimal(String)} is {@code BigDecimal(char[])} over
+     * {@code toCharArray()} internally, so this is the same parse minus the String and the
+     * copy (the M8-T2 numeric text path, #57).
+     */
     public BigDecimal bigDecimalValue() {
-        return new BigDecimal(numberText());
+        return new BigDecimal(json, valueStart, valueEnd - valueStart);
     }
 
     /** Dry-runs the in-place accumulation to test long range without exception control flow. */
