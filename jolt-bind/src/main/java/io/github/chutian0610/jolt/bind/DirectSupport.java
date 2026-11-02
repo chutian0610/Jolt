@@ -66,6 +66,26 @@ public final class DirectSupport {
         STATE.get().path.pop();
     }
 
+    /**
+     * The collection reads' recovery after an element failure (#61): the cursor sits inside
+     * {@code depth} open containers (between children); consume through their closers,
+     * nested containers included, so the enclosing field loop stays aligned — the scalar
+     * tag rejection's container skip, at collection scale. EOF ends it (a truncated document
+     * surfaces as the parser's own error on the next read).
+     */
+    public static void drainContainer(JoltParser p, int depth) {
+        while (depth > 0) {
+            Token t = p.nextToken();
+            if (t == Token.START_OBJECT || t == Token.START_ARRAY) {
+                depth++;
+            } else if (t == Token.END_OBJECT || t == Token.END_ARRAY) {
+                depth--;
+            } else if (t == Token.EOF) {
+                return;
+            }
+        }
+    }
+
     /** The seen-flag scratch: pooled per-thread (nesting takes its own array). The caller
      * zeroes the array before use — pooled content is stale by design. */
     public static boolean[] takeSeen(int length) {

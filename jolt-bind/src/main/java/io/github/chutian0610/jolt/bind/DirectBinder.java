@@ -649,6 +649,11 @@ final class DirectBinder<T> implements TypedBinder<T> {
             path.pushIndex(i);
             try {
                 out.add(readValue(p, look, listPlan.element(), config, path));
+            } catch (JsonBindException e) {
+                // #61: the failure left the cursor inside this array — drain to its closer
+                // so the enclosing field loop stays aligned, then let it propagate
+                DirectSupport.drainContainer(p, 1);
+                throw e;
             } finally {
                 path.pop();
             }
@@ -673,6 +678,10 @@ final class DirectBinder<T> implements TypedBinder<T> {
             path.pushName(key);
             try {
                 out.put(key, readValue(p, valueToken, mapPlan.value(), config, path));
+            } catch (JsonBindException e) {
+                // #61: drain this object to its closer before the failure propagates
+                DirectSupport.drainContainer(p, 1);
+                throw e;
             } finally {
                 path.pop();
             }
@@ -707,6 +716,10 @@ final class DirectBinder<T> implements TypedBinder<T> {
                         buffer = grown;
                     }
                     buffer[len++] = readValue(p, look, arrayPlan.component(), config, path);
+                } catch (JsonBindException e) {
+                    // #61: drain this array to its closer before the failure propagates
+                    DirectSupport.drainContainer(p, 1);
+                    throw e;
                 } finally {
                     path.pop();
                 }
@@ -714,7 +727,17 @@ final class DirectBinder<T> implements TypedBinder<T> {
                 look = p.nextToken();
             }
             Object out = java.lang.reflect.Array.newInstance(raw, len);
-            System.arraycopy(buffer, 0, out, 0, len);
+            if (raw.isPrimitive()) {
+                // #60: arraycopy from the Object[] scratch into a primitive array throws
+                // ArrayStoreException — the elements are the boxed values readValue produced
+                // (a JSON null against a primitive component raised before reaching here),
+                // so Array.set unboxes them one by one
+                for (int j = 0; j < len; j++) {
+                    java.lang.reflect.Array.set(out, j, buffer[j]);
+                }
+            } else {
+                System.arraycopy(buffer, 0, out, 0, len);
+            }
             return out;
         } finally {
             for (int j = 0; j < len; j++) {
