@@ -87,6 +87,19 @@ final class PojoSpecializer {
         } catch (NoSuchMethodException noPublicNoArg) {
             return false;
         }
+        return componentsEmittable(type);
+    }
+
+    /**
+     * The component clause of the capability predicate, shared by BOTH grades (#53): every
+     * public setter's parameter type passes the shared emittable check — public reference
+     * component types only, the emitted bytecode names them. This is the clause
+     * {@code GeneratedBinders} consults for the whole type before any emission, so the
+     * tree-path parse/write and the direct read refuse the same declarations. The
+     * structural clauses (public concrete class, public no-arg constructor) live only in
+     * {@link #isDirectCapable} — they are plan-buildability, not component visibility.
+     */
+    static boolean componentsEmittable(Class<?> type) {
         for (Method setter : type.getMethods()) {
             if (setter.getName().startsWith("set") && setter.getReturnType() == void.class
                     && setter.getParameterCount() == 1

@@ -227,10 +227,10 @@ class GeneratedBindersTest {
         }
     }
 
-    // NOTE: the visibility-refused fixtures are asserted at the PREDICATE level only
-    // (nonPublicComponentTypesKeepTheRecordOffTheDirectRead) — generating their binders
-    // trips the pre-existing M5 tree-path defect (the emitted initChildren/tree bodies
-    // LDC the non-public component type), which is #49's recorded follow-up ticket.
+    // The visibility-refused fixtures below generate safely since #53: the capability
+    // predicate gates BOTH grades before any emission (the whole type keeps the reflective
+    // arm) — asserted in capabilityRefusedTypesKeepTheWholeTypeOnTheReflectiveArm and
+    // capabilityRefusedTypesBindCorrectlyThroughTheReflectiveArm.
 
     public record Graded(String course, BindFixtures.Status status) {}
 
@@ -266,6 +266,19 @@ class GeneratedBindersTest {
 
     public record WithHidRecord(HidRec r) {}
 
+    /** The POJO twins of the defect shape: public POJOs, package-private property types. */
+    public static class PkgChildPojo {
+        private HidRec r;
+        public HidRec getR() { return r; }
+        public void setR(HidRec r) { this.r = r; }
+    }
+
+    public static class PkgEnumPojo {
+        private Pkg p;
+        public Pkg getP() { return p; }
+        public void setP(Pkg p) { this.p = p; }
+    }
+
     @Test
     void nonPublicComponentTypesKeepTheRecordOffTheDirectRead() {
         // the emitted bytecode NAMES every reference component type — LDC class constants
@@ -276,5 +289,52 @@ class GeneratedBindersTest {
         assertFalse(RecordSpecializer.isDirectCapable(WithHidRecord.class));
         assertTrue(RecordSpecializer.isDirectCapable(Graded.class));
         assertTrue(RecordSpecializer.isDirectCapable(Shelved.class));
+    }
+
+    @Test
+    void capabilityRefusedTypesKeepTheWholeTypeOnTheReflectiveArm() {
+        // #53: the capability predicate gates BOTH grades, once per type, before any
+        // emission — generation of these shapes used to crash (the LDC of the non-public
+        // component class in jolt$initChildren, the pre-existing M5 defect recorded in
+        // #49). The whole type keeps the reflective binder: no half-generated class, no
+        // per-component fallback.
+        for (Class<?> refused : new Class<?>[]{WithPkgEnum.class, WithHidRecord.class,
+                PkgChildPojo.class, PkgEnumPojo.class}) {
+            TypedBinder<?> binder = GeneratedBinders.forType(refused);
+            assertFalse(binder.getClass().getName()
+                            .startsWith("io.github.chutian0610.jolt.gen.Gen$"),
+                    refused.getName());
+        }
+        assertTrue(RecordSpecializer.isDirectCapable(Graded.class));
+        assertTrue(RecordSpecializer.isDirectCapable(Shelved.class));
+        assertFalse(PojoSpecializer.isDirectCapable(PkgChildPojo.class));
+        assertFalse(PojoSpecializer.isDirectCapable(PkgEnumPojo.class));
+    }
+
+    @Test
+    void capabilityRefusedTypesBindCorrectlyThroughTheReflectiveArm() {
+        // the regression cell: functional parity through the fallback, both directions,
+        // for the record and POJO twins of the defect shape. Records assert value
+        // equality against the facade's tree path; the POJO twins have no value equals,
+        // so their parity is the byte-identical round trip itself.
+        record Cell(Class<?> type, String json, boolean valueEquals) {}
+        for (Cell cell : new Cell[]{
+                new Cell(WithPkgEnum.class, "{\"p\":\"A\"}", true),
+                new Cell(WithHidRecord.class, "{\"r\":{\"v\":7}}", true),
+                new Cell(PkgEnumPojo.class, "{\"p\":\"A\"}", false),
+                new Cell(PkgChildPojo.class, "{\"r\":{\"v\":7}}", false)}) {
+            @SuppressWarnings("unchecked")
+            TypedBinder<Object> binder =
+                    (TypedBinder<Object>) (TypedBinder<?>) GeneratedBinders.forType(cell.type);
+            Object parsed = binder.parse(
+                    Tree.parse(cell.json.getBytes(StandardCharsets.UTF_8)), "$",
+                    BindConfig.defaults());
+            JoltWriter writer = Jolt.write();
+            binder.write(parsed, writer);
+            assertEquals(cell.json, writer.toString(), cell.type.getName());
+            if (cell.valueEquals) {
+                assertEquals(Bind.parse(cell.json, cell.type), parsed, cell.type.getName());
+            }
+        }
     }
 }
