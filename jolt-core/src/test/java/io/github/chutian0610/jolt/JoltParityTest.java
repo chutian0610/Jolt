@@ -149,4 +149,35 @@ class JoltParityTest {
         assertEquals(false, parser.fieldNameEquals("2"));
         drain(parser);
     }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("engines")
+    void bakedFieldNameKeysCompareAcrossEngines(String engine, BiFunction<String, Integer, JoltParser> parse) {
+        // the M8 baked-key chain (#55's #1 lever): pre-encoded keys, no re-encode per miss;
+        // semantics identical to the String overload, token for token
+        JoltParser parser = parse.apply("{\"name\":\"v\",\"\\u0071uantity\":2,\"nape\":3}", 512);
+        FieldName name = FieldName.of("name");
+        FieldName quantity = FieldName.of("quantity");
+        assertEquals(Token.START_OBJECT, parser.nextToken());
+        assertEquals(Token.FIELD_NAME, parser.nextToken());
+        assertTrue(parser.fieldNameEquals(name));
+        assertEquals(false, parser.fieldNameEquals(FieldName.of("name ")));
+        assertEquals(false, parser.fieldNameEquals(FieldName.of("nam")));
+        // a chain of baked keys keeps comparing after misses (the String overload's
+        // single-entry cache thrashes exactly here — the dissection's #1 cost)
+        assertEquals(false, parser.fieldNameEquals(quantity));
+        assertTrue(parser.fieldNameEquals(name));
+        assertEquals(Token.VALUE_STRING, parser.nextToken());
+        assertEquals(Token.FIELD_NAME, parser.nextToken());
+        // the escaped form decodes to "quantity" — the rare fallback path
+        assertTrue(parser.fieldNameEquals(quantity));
+        assertEquals(false, parser.fieldNameEquals(FieldName.of("quantity ")));
+        assertEquals(Token.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(Token.FIELD_NAME, parser.nextToken());
+        assertTrue(parser.fieldNameEquals(FieldName.of("nape")));
+        // non-FIELD_NAME state reports false rather than lying
+        assertEquals(Token.VALUE_NUMBER_INT, parser.nextToken());
+        assertEquals(false, parser.fieldNameEquals(FieldName.of("3")));
+        drain(parser);
+    }
 }

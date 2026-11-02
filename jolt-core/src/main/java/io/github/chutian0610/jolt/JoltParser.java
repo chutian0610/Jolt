@@ -66,6 +66,23 @@ public interface JoltParser {
      * comparison with a new name may allocate its encoded form). Non-{@code FIELD_NAME}
      * state returns false. Escaped field names (rare) fall back to the decoded comparison,
      * which allocates — the never-taken fast/slow contract.
+     *
+     * <p><b>Frozen substrate:</b> this overload's single-entry cache is intentionally
+     * untouched during M8 — the {@code Gen$Ref$} reference arm (the M8-off gate comparator,
+     * spec #54's PIN) is the M7-form body over exactly this method. Its multi-name chain
+     * thrash is the dissection's #1 cost (#55); the fix is the {@link FieldName} overload
+     * below, not a change here.
      */
     boolean fieldNameEquals(String expected);
+
+    /**
+     * Zero-allocation comparison of the most recent {@link Token#FIELD_NAME} token's decoded
+     * text with the pre-encoded {@code expected} key — the multi-name-chain form: binders
+     * bake one {@link FieldName} per component name, so a match chain of any length compares
+     * raw bytes/chars and never re-encodes (the String overload's per-parser cache holds one
+     * name; a chain defeats it — the M8-T0 dissection's #1 cost, #55). Semantics identical to
+     * {@link #fieldNameEquals(String)}: non-{@code FIELD_NAME} state returns false; escaped
+     * field names (rare) fall back to the decoded comparison, which allocates.
+     */
+    boolean fieldNameEquals(FieldName expected);
 }

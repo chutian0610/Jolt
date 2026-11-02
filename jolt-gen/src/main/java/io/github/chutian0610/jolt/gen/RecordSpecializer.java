@@ -122,9 +122,12 @@ final class RecordSpecializer {
         };
     }
 
-    /** Adds the specialized fields and straight-line overrides to the generated class. */
+    /** Adds the specialized fields and straight-line overrides to the generated class. The
+     * {@code referenceForm} (M8-off, the gate's comparator) emits the M7-form body: the
+     * String-name chain — the frozen {@code fieldNameEquals(String)} overload — while the
+     * main form bakes one {@code FieldName} per component (the dissection's #1 fix, #55). */
     static DynamicType.Builder<?> apply(DynamicType.Builder<?> builder, String generatedName,
-                                        GenPlan<?> plan) {
+                                        GenPlan<?> plan, boolean referenceForm) {
         String self = generatedName.replace('.', '/');
         boolean direct = isDirectCapable(plan);
         builder = builder.defineField(NAME_SET_FIELD, java.util.Set.class, Visibility.PUBLIC);
@@ -134,6 +137,13 @@ final class RecordSpecializer {
             builder = builder.defineField(NAMES_FIELD, String[].class, Visibility.PUBLIC);
             builder = builder.defineField(PRIMITIVES_FIELD, boolean[].class, Visibility.PUBLIC);
             builder = builder.defineField(SIMPLE_NAMES_FIELD, String[].class, Visibility.PUBLIC);
+            if (!referenceForm) {
+                // the baked match keys — every component enters the chain
+                for (int i = 0; i < plan.names.length; i++) {
+                    builder = builder.defineField(Emit.FIELD_NAME_FIELD_PREFIX + i,
+                            io.github.chutian0610.jolt.FieldName.class, Visibility.PUBLIC);
+                }
+            }
         }
         for (int i = 0; i < plan.names.length; i++) {
             Class<?> raw = rawOf(plan.genericTypes[i]);
@@ -159,7 +169,8 @@ final class RecordSpecializer {
                 .withParameters(Node.class, java.util.Set.class, String.class)
                 .intercept(new Implementation.Simple(new CheckUnknownBody(self)))
                 .defineMethod(INIT_CHILDREN_METHOD, void.class, Visibility.PUBLIC)
-                .intercept(new Implementation.Simple(new InitChildrenBody(self, plan)));
+                .intercept(new Implementation.Simple(
+                        new InitChildrenBody(self, plan, referenceForm)));
         if (direct) {
             // the third form: the token-consuming direct read (the document root), its
             // nested body form (the caller consumed this value's START_OBJECT), and the
@@ -167,10 +178,12 @@ final class RecordSpecializer {
             builder = builder
                     .defineMethod(PARSE_TOKENS_METHOD, Object.class, Visibility.PUBLIC)
                     .withParameters(JoltParser.class, BindConfig.class)
-                    .intercept(new Implementation.Simple(new ParseTokensBody(self, plan, false)))
+                    .intercept(new Implementation.Simple(
+                            new ParseTokensBody(self, plan, false, referenceForm)))
                     .defineMethod(PARSE_TOKENS_BODY_METHOD, Object.class, Visibility.PUBLIC)
                     .withParameters(JoltParser.class, BindConfig.class)
-                    .intercept(new Implementation.Simple(new ParseTokensBody(self, plan, true)))
+                    .intercept(new Implementation.Simple(
+                            new ParseTokensBody(self, plan, true, referenceForm)))
                     .defineMethod(HAS_DIRECT_READ_METHOD, boolean.class, Visibility.PUBLIC)
                     .intercept(new Implementation.Simple(
                             (mv, context, method) -> {
@@ -187,7 +200,7 @@ final class RecordSpecializer {
      * the constructor handle, per-component generic types). Public fields cross the runtime
      * package freely — see the class javadoc.
      */
-    static void bakeFields(GenBinderBase binder, GenPlan<?> plan) {
+    static void bakeFields(GenBinderBase binder, GenPlan<?> plan, boolean referenceForm) {
         try {
             field(binder, NAME_SET_FIELD).set(binder, plan.nameSet);
             field(binder, HANDLE_FIELD).set(binder, plan.constructorHandle);
@@ -204,6 +217,12 @@ final class RecordSpecializer {
                 field(binder, NAMES_FIELD).set(binder, names);
                 field(binder, PRIMITIVES_FIELD).set(binder, primitives);
                 field(binder, SIMPLE_NAMES_FIELD).set(binder, simpleNames);
+                if (!referenceForm) {
+                    for (int i = 0; i < names.length; i++) {
+                        field(binder, Emit.FIELD_NAME_FIELD_PREFIX + i)
+                                .set(binder, io.github.chutian0610.jolt.FieldName.of(names[i]));
+                    }
+                }
             }
             for (int i = 0; i < plan.names.length; i++) {
                 if (kindOf(rawOf(plan.genericTypes[i])) == Emit.Kind.GENERIC) {
@@ -216,8 +235,11 @@ final class RecordSpecializer {
     }
 
     /**
-     * Runs {@code jolt$initChildren} on the instantiated binder — after {@code cascade} so the
-     * child-binder fields resolve through the (already-registered) cache. Via reflection so
+     * Runs {@code jolt$initChildren} on the instantiated binder: the main form after
+     * {@code cascade}, so the child-binder fields resolve through the (already-registered)
+     * cache; the M8-off reference form without a cascade — its emitted body resolves children
+     * through {@code referenceForType}, growing the reference namespace lazily (the parent is
+     * in {@code REF_CACHE} before this runs, so self-reference terminates). Via reflection so
      * {@code GenBinderBase}, the fallback class, stays untouched.
      */
     static void initGeneratedBinder(GenBinderBase binder) {
@@ -557,15 +579,18 @@ final class RecordSpecializer {
         private final String recordInternal;
         private final boolean hasPrimitives;
         private final boolean nested;
+        private final boolean referenceForm;
 
         /** {@code nested} selects the body form: the caller consumed this value's
          * START_OBJECT and owns the path position and the drain — no path reset, no root
-         * dispatch, no tail drain. */
-        ParseTokensBody(String self, GenPlan<?> plan, boolean nested) {
+         * dispatch, no tail drain. The {@code referenceForm} (M8-off, the gate comparator)
+         * keeps the M7 String-name chain; the main form uses the baked FieldName keys. */
+        ParseTokensBody(String self, GenPlan<?> plan, boolean nested, boolean referenceForm) {
             this.self = self;
             this.plan = plan;
             this.recordInternal = internal(plan.type);
             this.nested = nested;
+            this.referenceForm = referenceForm;
             boolean any = false;
             for (java.lang.reflect.Type genericType : plan.genericTypes) {
                 any |= rawOf(genericType).isPrimitive();
@@ -691,14 +716,24 @@ final class RecordSpecializer {
             mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "END_OBJECT", TOKEN_DESC);
             mv.visitJumpInsn(Opcodes.IF_ACMPEQ, sweep);
 
-            // the inline match chain: fieldNameEquals against the baked name constants
+            // the inline match chain: the M8 form compares against the baked FieldName keys
+            // (never re-encodes — the dissection's #1 fix, #55); the reference form (M8-off,
+            // the gate comparator) keeps the M7 String chain through the frozen overload
             Label[] matched = new Label[n];
             for (int i = 0; i < n; i++) {
                 matched[i] = new Label();
                 mv.visitVarInsn(Opcodes.ALOAD, 1);
-                mv.visitLdcInsn(plan.names[i]);
-                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
-                        PARSER_FIELD_NAME_EQUALS_DESC, true);
+                if (referenceForm) {
+                    mv.visitLdcInsn(plan.names[i]);
+                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
+                            PARSER_FIELD_NAME_EQUALS_DESC, true);
+                } else {
+                    mv.visitVarInsn(Opcodes.ALOAD, 0);
+                    mv.visitFieldInsn(Opcodes.GETFIELD, self, Emit.FIELD_NAME_FIELD_PREFIX + i,
+                            Emit.FIELD_NAME_DESC);
+                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
+                            Emit.PARSER_FIELD_NAME_EQUALS_KEY_DESC, true);
+                }
                 mv.visitJumpInsn(Opcodes.IFNE, matched[i]);
             }
             // unknown field: note (strict mode) + skip, one shared call
@@ -1332,10 +1367,12 @@ final class RecordSpecializer {
 
         private final String self;
         private final GenPlan<?> plan;
+        private final boolean referenceForm;
 
-        InitChildrenBody(String self, GenPlan<?> plan) {
+        InitChildrenBody(String self, GenPlan<?> plan, boolean referenceForm) {
             this.self = self;
             this.plan = plan;
+            this.referenceForm = referenceForm;
         }
 
         @Override
@@ -1346,7 +1383,10 @@ final class RecordSpecializer {
                 if (kindOf(raw) == Emit.Kind.CHILD) {
                     mv.visitVarInsn(Opcodes.ALOAD, 0);
                     mv.visitLdcInsn(Type.getType(raw));
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, Emit.GENERATED_INTERNAL, "forType",
+                    // the reference namespace resolves its children within itself — an
+                    // M8-off parent must not pick up an M8-form child through the main cache
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, Emit.GENERATED_INTERNAL,
+                            referenceForm ? "referenceForType" : "forType",
                             "(Ljava/lang/Class;)" + TYPED_BINDER_FIELD_DESC, false);
                     mv.visitFieldInsn(Opcodes.PUTFIELD, self, CHILD_FIELD_PREFIX + i,
                             TYPED_BINDER_FIELD_DESC);

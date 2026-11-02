@@ -54,11 +54,16 @@ final class Emit {
     static final String TOKEN_DESC = "L" + TOKEN_INTERNAL + ";";
     static final String PARSER_NEXT_TOKEN_DESC = "()Lio/github/chutian0610/jolt/Token;";
     static final String PARSER_FIELD_NAME_EQUALS_DESC = "(Ljava/lang/String;)Z";
+    /** The baked-key chain (the M8 form): one pre-encoded {@code FieldName} per component. */
+    static final String FIELD_NAME_INTERNAL = internal(io.github.chutian0610.jolt.FieldName.class);
+    static final String FIELD_NAME_DESC = "L" + FIELD_NAME_INTERNAL + ";";
+    static final String PARSER_FIELD_NAME_EQUALS_KEY_DESC = "(" + FIELD_NAME_DESC + ")Z";
     static final String PARSER_TEXT_VALUE_DESC = "()Ljava/lang/String;";
     static final String PARSER_BIG_DECIMAL_DESC = "()Ljava/math/BigDecimal;";
 
     static final String CHILD_FIELD_PREFIX = "jolt$child$";
     static final String TYPE_FIELD_PREFIX = "jolt$type$";
+    static final String FIELD_NAME_FIELD_PREFIX = "jolt$fn$";
 
     private Emit() {}
 

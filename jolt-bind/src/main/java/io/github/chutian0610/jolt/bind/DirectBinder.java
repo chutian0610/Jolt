@@ -1,5 +1,6 @@
 package io.github.chutian0610.jolt.bind;
 
+import io.github.chutian0610.jolt.FieldName;
 import io.github.chutian0610.jolt.JoltParser;
 import io.github.chutian0610.jolt.Token;
 import io.github.chutian0610.jolt.tree.Node;
@@ -28,7 +29,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * public wrappers are the generated direct read's INVOKESTATIC targets — so both direct
  * grades share one implementation. Values are read type-driven through {@link #readValue} —
  * the same code path for components, collection elements, and natural mapping. Field-name
- * matching is zero-allocation ({@link JoltParser#fieldNameEquals}); per-thread parsers are
+ * matching is zero-allocation (the baked {@link FieldName} keys —
+ * the M8-T0 dissection's #1 fix: the String overload's single-entry cache thrashes on any
+ * multi-name chain); per-thread parsers are
  * reused via {@code reset} (the M1 reuse discipline).
  */
 final class DirectBinder<T> implements TypedBinder<T> {
@@ -138,6 +141,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
     private final boolean[] primitives;
     private final Constructor<T> constructor; // record canonical | POJO public no-arg
     private final Method[] setters;           // POJO only, sorted by name
+    private final FieldName[] fieldNames; // the baked match keys
 
     private DirectBinder(Class<T> type, Shape shape) {
         this.type = type;
@@ -149,10 +153,12 @@ final class DirectBinder<T> implements TypedBinder<T> {
             this.rawTypes = new Class<?>[components.length];
             this.plans = new Plan[components.length];
             this.primitives = new boolean[components.length];
+            this.fieldNames = new FieldName[components.length];
             this.setters = new Method[0];
             Class<?>[] argTypes = new Class<?>[components.length];
             for (int i = 0; i < components.length; i++) {
                 names[i] = components[i].getName();
+                fieldNames[i] = FieldName.of(names[i]);
                 rawTypes[i] = components[i].getType();
                 argTypes[i] = rawTypes[i];
                 simpleNames[i] = rawTypes[i].getSimpleName();
@@ -174,8 +180,10 @@ final class DirectBinder<T> implements TypedBinder<T> {
         this.rawTypes = new Class<?>[names.length];
         this.plans = new Plan[names.length];
         this.primitives = new boolean[names.length];
+        this.fieldNames = new FieldName[names.length];
         this.setters = sortedSetters(type);
         for (int i = 0; i < setters.length; i++) {
+            fieldNames[i] = FieldName.of(names[i]);
             Class<?> raw = setters[i].getParameterTypes()[0];
             rawTypes[i] = raw;
             simpleNames[i] = raw.getSimpleName();
@@ -323,7 +331,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
             // t == FIELD_NAME — match by name against the component table, zero allocation
             int comp = -1;
             for (int i = 0; i < names.length; i++) {
-                if (p.fieldNameEquals(names[i])) {
+                if (p.fieldNameEquals(fieldNames[i])) {
                     comp = i;
                     break;
                 }
@@ -375,7 +383,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
         while ((t = p.nextToken()) != Token.END_OBJECT) {
             int comp = -1;
             for (int i = 0; i < names.length; i++) {
-                if (p.fieldNameEquals(names[i])) {
+                if (p.fieldNameEquals(fieldNames[i])) {
                     comp = i;
                     break;
                 }

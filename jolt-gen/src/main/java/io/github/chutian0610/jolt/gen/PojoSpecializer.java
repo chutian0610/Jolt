@@ -132,12 +132,22 @@ final class PojoSpecializer {
                 + accessorName.substring(prefix + 1);
     }
 
-    /** Adds the specialized fields and straight-line overrides to the generated class. */
+    /** Adds the specialized fields and straight-line overrides to the generated class. The
+     * {@code referenceForm} (M8-off, the gate's comparator) emits the M7-form body: the
+     * String-name chain — the frozen {@code fieldNameEquals(String)} overload — while the
+     * main form bakes one {@code FieldName} per setter key (the dissection's #1 fix, #55). */
     static DynamicType.Builder<?> apply(DynamicType.Builder<?> builder, String generatedName,
-                                        GenPlan<?> plan) {
+                                        GenPlan<?> plan, boolean referenceForm) {
         String self = generatedName.replace('.', '/');
         builder = builder.defineField(RecordSpecializer.NAME_SET_FIELD, java.util.Set.class,
                 Visibility.PUBLIC);
+        if (isDirectCapable(plan.type) && !referenceForm) {
+            // the baked match keys — every setter key enters the chain
+            for (int i = 0; i < plan.setters.size(); i++) {
+                builder = builder.defineField(Emit.FIELD_NAME_FIELD_PREFIX + i,
+                        io.github.chutian0610.jolt.FieldName.class, Visibility.PUBLIC);
+            }
+        }
         for (int i = 0; i < plan.setters.size(); i++) {
             Class<?> raw = rawOf(componentType(plan, i));
             switch (kindOf(raw)) {
@@ -162,7 +172,8 @@ final class PojoSpecializer {
                 .withParameters(Node.class, java.util.Set.class, String.class)
                 .intercept(new Implementation.Simple(new CheckUnknownBody(self)))
                 .defineMethod(RecordSpecializer.INIT_CHILDREN_METHOD, void.class, Visibility.PUBLIC)
-                .intercept(new Implementation.Simple(new InitChildrenBody(self, plan)));
+                .intercept(new Implementation.Simple(
+                        new InitChildrenBody(self, plan, referenceForm)));
         if (isDirectCapable(plan.type)) {
             // the direct forms: the document root and the nested body (the caller consumed
             // this value's START_OBJECT), plus the capability flag the facade consults
@@ -171,12 +182,12 @@ final class PojoSpecializer {
                             Visibility.PUBLIC)
                     .withParameters(io.github.chutian0610.jolt.JoltParser.class, BindConfig.class)
                     .intercept(new Implementation.Simple(
-                            new ParseTokensBody(self, plan, false)))
+                            new ParseTokensBody(self, plan, false, referenceForm)))
                     .defineMethod(RecordSpecializer.PARSE_TOKENS_BODY_METHOD, Object.class,
                             Visibility.PUBLIC)
                     .withParameters(io.github.chutian0610.jolt.JoltParser.class, BindConfig.class)
                     .intercept(new Implementation.Simple(
-                            new ParseTokensBody(self, plan, true)))
+                            new ParseTokensBody(self, plan, true, referenceForm)))
                     .defineMethod(RecordSpecializer.HAS_DIRECT_READ_METHOD, boolean.class,
                             Visibility.PUBLIC)
                     .intercept(new Implementation.Simple(
@@ -190,10 +201,18 @@ final class PojoSpecializer {
     }
 
     /** Bakes the name set and the per-component generic Types (no constructor handle needed —
-     * the parse body constructs with NEW + INVOKESPECIAL on the verified public no-arg one). */
-    static void bakeFields(GenBinderBase binder, GenPlan<?> plan) {
+     * the parse body constructs with NEW + INVOKESPECIAL on the verified public no-arg one);
+     * the main form also bakes the FieldName match keys. */
+    static void bakeFields(GenBinderBase binder, GenPlan<?> plan, boolean referenceForm) {
         try {
             field(binder, RecordSpecializer.NAME_SET_FIELD).set(binder, plan.nameSet);
+            if (isDirectCapable(plan.type) && !referenceForm) {
+                for (int i = 0; i < plan.setters.size(); i++) {
+                    field(binder, Emit.FIELD_NAME_FIELD_PREFIX + i).set(binder,
+                            io.github.chutian0610.jolt.FieldName.of(
+                                    setterKey(plan.setters.get(i))));
+                }
+            }
             for (int i = 0; i < plan.setters.size(); i++) {
                 if (kindOf(rawOf(componentType(plan, i))) == Emit.Kind.GENERIC) {
                     field(binder, TYPE_FIELD_PREFIX + i).set(binder, componentType(plan, i));
@@ -582,14 +601,18 @@ final class PojoSpecializer {
         private final GenPlan<?> plan;
         private final String pojoInternal;
         private final boolean nested;
+        private final boolean referenceForm;
 
         /** {@code nested} selects the body form: the caller consumed this value's
-         * START_OBJECT and owns the path position and the drain. */
-        ParseTokensBody(String self, GenPlan<?> plan, boolean nested) {
+         * START_OBJECT and owns the path position and the drain. The {@code referenceForm}
+         * (M8-off, the gate comparator) keeps the M7 String-name chain; the main form uses
+         * the baked FieldName keys. */
+        ParseTokensBody(String self, GenPlan<?> plan, boolean nested, boolean referenceForm) {
             this.self = self;
             this.plan = plan;
             this.pojoInternal = internal(plan.type);
             this.nested = nested;
+            this.referenceForm = referenceForm;
         }
 
         @Override
@@ -688,9 +711,17 @@ final class PojoSpecializer {
             for (int i = 0; i < n; i++) {
                 matched[i] = new Label();
                 mv.visitVarInsn(Opcodes.ALOAD, 1);
-                mv.visitLdcInsn(setterKey(plan.setters.get(i)));
-                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
-                        PARSER_FIELD_NAME_EQUALS_DESC, true);
+                if (referenceForm) {
+                    mv.visitLdcInsn(setterKey(plan.setters.get(i)));
+                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
+                            PARSER_FIELD_NAME_EQUALS_DESC, true);
+                } else {
+                    mv.visitVarInsn(Opcodes.ALOAD, 0);
+                    mv.visitFieldInsn(Opcodes.GETFIELD, self, Emit.FIELD_NAME_FIELD_PREFIX + i,
+                            Emit.FIELD_NAME_DESC);
+                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
+                            Emit.PARSER_FIELD_NAME_EQUALS_KEY_DESC, true);
+                }
                 mv.visitJumpInsn(Opcodes.IFNE, matched[i]);
             }
             mv.visitVarInsn(Opcodes.ALOAD, 1);
@@ -1283,10 +1314,12 @@ final class PojoSpecializer {
 
         private final String self;
         private final GenPlan<?> plan;
+        private final boolean referenceForm;
 
-        InitChildrenBody(String self, GenPlan<?> plan) {
+        InitChildrenBody(String self, GenPlan<?> plan, boolean referenceForm) {
             this.self = self;
             this.plan = plan;
+            this.referenceForm = referenceForm;
         }
 
         @Override
@@ -1297,7 +1330,10 @@ final class PojoSpecializer {
                 if (kindOf(raw) == Emit.Kind.CHILD) {
                     mv.visitVarInsn(Opcodes.ALOAD, 0);
                     mv.visitLdcInsn(Type.getType(raw));
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, Emit.GENERATED_INTERNAL, "forType",
+                    // the reference namespace resolves its children within itself — an
+                    // M8-off parent must not pick up an M8-form child through the main cache
+                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, Emit.GENERATED_INTERNAL,
+                            referenceForm ? "referenceForType" : "forType",
                             "(Ljava/lang/Class;)" + TYPED_BINDER_FIELD_DESC, false);
                     mv.visitFieldInsn(Opcodes.PUTFIELD, self, CHILD_FIELD_PREFIX + i,
                             TYPED_BINDER_FIELD_DESC);

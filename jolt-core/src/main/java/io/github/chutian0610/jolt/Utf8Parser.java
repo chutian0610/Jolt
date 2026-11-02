@@ -444,6 +444,32 @@ public final class Utf8Parser implements JoltParser {
     }
 
     /**
+     * The baked-key form: the expected name arrives already encoded, so a match chain of any
+     * length compares raw bytes and never re-encodes — the multi-name fix for the String
+     * overload's single-entry cache (the M8-T0 dissection's #1 cost, #55).
+     */
+    @Override
+    public boolean fieldNameEquals(FieldName expected) {
+        if (lastToken != Token.FIELD_NAME) {
+            return false;
+        }
+        if (!stringHasEscape) {
+            byte[] eb = expected.utf8;
+            int len = valueEnd - valueStart;
+            if (len != eb.length) {
+                return false;
+            }
+            for (int i = 0; i < len; i++) {
+                if (json[valueStart + i] != eb[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        return expected.name().equals(textValue());
+    }
+
+    /**
      * The most recent number under the number-promotion policy (ADR-0002): integers within long
      * range as {@link Long}, integers that overflow as {@link BigDecimal}; floats up to 17
      * significant digits and within double range as {@link Double}, precision-hungry or

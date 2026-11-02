@@ -31,6 +31,7 @@ public final class GeneratedBinders {
 
     private static final Map<Class<?>, TypedBinder<?>> CACHE = new ConcurrentHashMap<>();
     private static final Map<Class<?>, TypedBinder<?>> PLAN_CACHE = new ConcurrentHashMap<>();
+    private static final Map<Class<?>, TypedBinder<?>> REF_CACHE = new ConcurrentHashMap<>();
     private static final String GEN_PACKAGE = "io.github.chutian0610.jolt.gen";
 
     private GeneratedBinders() {}
@@ -46,7 +47,7 @@ public final class GeneratedBinders {
             if (cached != null) {
                 return cached;
             }
-            cached = create(type, true);
+            cached = create(type, true, false);
             CACHE.put(type, cached);
             io.github.chutian0610.jolt.bind.Bind.registerGenerated(type, cached);
             return cached;
@@ -71,8 +72,35 @@ public final class GeneratedBinders {
             if (cached != null) {
                 return cached;
             }
-            cached = create(type, false);
+            cached = create(type, false, false);
             PLAN_CACHE.put(type, cached);
+            return cached;
+        }
+    }
+
+    /**
+     * The M8-OFF REFERENCE arm for {@code type} — a BENCHMARK/REFERENCE arm, not a supported
+     * path: it generates the M7-form specialist (the String-name chain through the frozen
+     * {@code fieldNameEquals(String)} overload + the per-value door calls) under the
+     * {@code Gen$Ref$} namespace, cached separately, never registered with the {@code Bind}
+     * facade. This is the gate's comparator arm (spec #54's PIN): the in-run self-referential
+     * bar compares the M8 form against THIS form in the same build. Its nested children
+     * resolve within the reference namespace too — an M8-off parent never picks up an M8-form
+     * child. Public, capability-passing targets only (a refused type throws rather than
+     * silently degrading the arm — a benchmark must not measure a fallback unawares).
+     */
+    public static <T> TypedBinder<T> referenceForType(Class<T> type) {
+        TypedBinder<T> cached = cast(REF_CACHE.get(type));
+        if (cached != null) {
+            return cached;
+        }
+        synchronized (REF_CACHE) {
+            cached = cast(REF_CACHE.get(type));
+            if (cached != null) {
+                return cached;
+            }
+            cached = create(type, true, true);
+            REF_CACHE.put(type, cached);
             return cached;
         }
     }
@@ -94,9 +122,11 @@ public final class GeneratedBinders {
 
     /** Distinct class names per target: full-name SHA-256 prefix — the legacy
      * {@code hashCode()} hex collided (two classes of one benchmark fixture shared the same
-     * eight hex digits and silently loaded as one class). The plan-cached reference arm gets
-     * its own namespace so both classes of one type coexist. */
-    private static String generatedClassName(Class<?> type, boolean specialized) {
+     * eight hex digits and silently loaded as one class). The plan-cached reference arm and
+     * the M8-off reference arm get their own namespaces so multiple classes of one type
+     * coexist. */
+    private static String generatedClassName(Class<?> type, boolean specialized,
+                                             boolean referenceForm) {
         try {
             byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
                     .digest(type.getName().getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -104,14 +134,21 @@ public final class GeneratedBinders {
             for (int i = 0; i < 8; i++) {
                 hex.append(String.format("%02x", digest[i]));
             }
-            return GEN_PACKAGE + ".Gen$" + (specialized ? "" : "Plan$") + hex;
+            String grade = referenceForm ? "Ref$" : specialized ? "" : "Plan$";
+            return GEN_PACKAGE + ".Gen$" + grade + hex;
         } catch (java.security.NoSuchAlgorithmException impossible) {
             throw new IllegalStateException("SHA-256 unavailable", impossible);
         }
     }
 
-    private static <T> TypedBinder<T> create(Class<T> type, boolean specialized) {
+    private static <T> TypedBinder<T> create(Class<T> type, boolean specialized,
+                                             boolean referenceForm) {
         if (!Modifier.isPublic(type.getModifiers())) {
+            if (referenceForm) {
+                // a benchmark arm must never measure a fallback unawares — fail loudly
+                throw new IllegalStateException(
+                        "the M8-off reference arm binds public targets only: " + type.getName());
+            }
             // Fallback (documented): non-public targets keep the reflective binder.
             return io.github.chutian0610.jolt.bind.Bind.reflectiveBinder(type);
         }
@@ -124,19 +161,25 @@ public final class GeneratedBinders {
         // binds fine. A refused type keeps the reflective binder ENTIRE — never a
         // half-generated class. The plan-cached reference arm emits nothing: exempt.
         if (specialized && !capable(plan)) {
+            if (referenceForm) {
+                // a benchmark arm must never measure a fallback unawares — fail loudly
+                throw new IllegalStateException(
+                        "the M8-off reference arm cannot bind a capability-refused type: "
+                                + type.getName());
+            }
             // Fallback (documented): capability-refused targets keep the reflective binder.
             return io.github.chutian0610.jolt.bind.Bind.reflectiveBinder(type);
         }
-        String generatedName = generatedClassName(type, specialized);
+        String generatedName = generatedClassName(type, specialized, referenceForm);
         net.bytebuddy.dynamic.DynamicType.Builder<?> builder = new ByteBuddy()
                 .subclass(GenBinderBase.class)
                 .name(generatedName);
         // M5 specialization: straight-line parse/write overrides replace plan execution
         if (specialized) {
             if (type.isRecord()) {
-                builder = RecordSpecializer.apply(builder, generatedName, plan);
+                builder = RecordSpecializer.apply(builder, generatedName, plan, referenceForm);
             } else {
-                builder = PojoSpecializer.apply(builder, generatedName, plan);
+                builder = PojoSpecializer.apply(builder, generatedName, plan, referenceForm);
             }
         }
         Class<?> rawGenerated = builder
@@ -149,20 +192,30 @@ public final class GeneratedBinders {
             binder.assignPlan(plan);
             if (specialized) {
                 if (type.isRecord()) {
-                    RecordSpecializer.bakeFields(binder, plan);
+                    RecordSpecializer.bakeFields(binder, plan, referenceForm);
                 } else {
-                    PojoSpecializer.bakeFields(binder, plan);
+                    PojoSpecializer.bakeFields(binder, plan, referenceForm);
                 }
             }
             // register BEFORE cascading: self-referential records terminate via the cache.
             // The facade cache/registry belong to the specialized path only — the plan-cached
-            // arm lives in its own map and never feeds the nested routing.
-            if (specialized) {
+            // and M8-off reference arms live in their own maps and never feed the nested
+            // routing (the reference arm's children resolve within its own namespace, so it
+            // registers in ITS cache before its jolt$initChildren runs — same termination rule).
+            if (specialized && !referenceForm) {
                 CACHE.put(type, binder);
                 io.github.chutian0610.jolt.bind.Bind.registerGenerated(type, (TypedBinder<T>) binder);
+            } else if (referenceForm) {
+                REF_CACHE.put(type, binder);
             }
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("generated binder could not be instantiated", e);
+        }
+        if (referenceForm) {
+            // no cascade: the reference namespace grows lazily through its emitted
+            // jolt$initChildren (referenceForType), the door needs no generated children
+            RecordSpecializer.initGeneratedBinder(binder);
+            return (TypedBinder<T>) binder;
         }
         cascade(plan);
         if (specialized) {
