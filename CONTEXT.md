@@ -79,7 +79,18 @@ No wide conversions: the JSON type must match the target ("42" does not bind to 
 POJO/record mapping built on the core and tree layers, delivered as the `jolt-bind` module (M3). Loads via the tree (parse → Node → constructed types; serialize symmetrically) — a direct streaming bind is a possible future evolution, not part of M3.
 
 **`jolt-simd`**:
-An optional experimental module using the Vector API for token scanning. Never a dependency of `jolt-core`. Parked: revisited only after the binding-side gap is closed — not conditioned on the Vector API leaving incubation.
+An optional experimental module using the Vector API for token scanning. Never a dependency
+of `jolt-core` — the consumer adds it and the JVM flag (`--add-modules jdk.incubator.vector`);
+the core's parser factory dispatches to it only when installed, so the scalar and SIMD
+scanners coexist in one build (the in-run A/B's two arms). UTF-8 engine only. Unparked in
+M9 (the binding-side gap closed): **ships only if it beats the scalar floor by its pinned
+in-run margin** — an honest negative result parks it again.
+
+**Scanner floor**:
+The scanning segment of every read — token dispatch, string spans, whitespace, numbers.
+The largest single cost of a bind after the binding-side contest closed (M8), and the M9
+attack surface: scalar levers first, SIMD second. Lever discipline: byte-identical
+semantics, zero added allocation.
 
 ### Semantics
 
