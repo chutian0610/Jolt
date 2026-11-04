@@ -140,7 +140,8 @@ arm itself measures **2.099M / 2.156M** (parity, 1.01–1.02× the generated arm
 throughput-neutral; M6's 1.94× was cross-day machine drift, and the in-run A/B is the only
 trustworthy comparator. The 2.6× belongs to the direct-read architecture itself.
 Disclosure: Jackson afterburner's POJO ceiling stands at **1.82×** generated direct
-(contested, not matched); Jackson databind wins the whole-graph record at **1.92–1.95×**;
+(contested, not matched; M8 contested it further — see below); Jackson databind won the
+whole-graph record at **1.92–1.95×** at M7 (M8 flipped this — see below);
 the generated direct arm is **~2× the default facade path**. Allocation: reflective direct
 **3624 B/op** (reproduced exactly), generated direct **3488 B/op** — the eliminated
 **−136 B/op** matches the predicted args Object[10] + Long/Double constructor boxing, and
@@ -157,10 +158,51 @@ $JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*DirectBindBenchmark.
 $JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*DirectBindAlloc.*" -prof gc -wi 5 -i 5 -f 3
 ```
 
-### Generated binders (jolt-gen, M4 + M5 + M7)
+**M8 trajectory (the Jackson ceiling contest, gate-adjudicated at final HEAD across two
+independent runs, in-run A/B):** M8 opened with a dissection (#55) that OVERTURNED the
+grilling's prime suspect — the binder match chain, not text materialization, dominated both
+directions (`fieldNameEquals(String)` keeps a single-entry expected-name cache; every chain
+miss re-encoded the name: 47–53% of read time, 1656 of the graph's 3488 B/op; the door
+machinery was the minor share, 8–14%). The one-time recalibration re-ranked the levers and
+admitted ONE additive jolt-core API — the pre-encoded `FieldName` key
+(`JoltParser.fieldNameEquals(FieldName)`, both engines; the String overload frozen as the
+reference arm's substrate). Lever by lever, the generated direct read went POJO
+491 → 296 → **265 ns** / 800 → 464 → **392 B/op**, whole-graph 1958 → 1311 → **1052 ns** /
+3488 → 1832 → **1352 B/op**: baked-key chains for BOTH direct grades (T1), collection-loop
+inlining at full width — element loops and element reads in the parent body, record/POJO
+elements through the monomorphic child body, per-parse path carrier, `bigDecimalValue`
+parsing the span in place (T2). **Both T0-pinned bars MET at the gate, every run**:
+POJO generated direct **0.95× / 1.11× / 0.97×** Jackson afterburner (pinned ≥ 0.9×; the
+1.0× parity aspiration disclosed unreached — bands do not overlap in the clean runs) and
+whole-graph **1.66× / 1.68× / 1.61×** the in-run M8-off reference arm (pinned ≥ 1.5×; the
+comparator is the M7-form body under the `Gen$Ref$` namespace in the same build, frozen
+`fieldNameEquals(String)` + door calls — a conservative comparator, since the shared
+substrate improves under it). **The whole-graph databind deficit is GONE**: 1.92–1.95×
+behind at v0.7.1 → **1.01–1.03× (parity-to-ahead, bands overlap)**. Allocation: generated
+direct **1352 B/op** vs the 960 B/op target-graph floor (reproduced exactly), reflective
+direct **1552** (from 3624 — the shared substrate's effect on the other grade), tree
+**7456** (+8: the parser instance grew by the numeric-scratch field past an alignment
+boundary, and the tree path allocates a fresh parser per parse — its documented
+no-zero-alloc contract; the direct path's reuse hides it). The fast lane ran on the way
+(#60/#61, shipped as **v0.7.2** from the v0.7.1 line): the direct read's primitive-array
+build (`ArrayStoreException`) and an element-failure infinite loop — both fixed before the
+inline form landed. Correctness: the three-grade matrix and the element-error cells
+(message + `$.x[i]` byte-identical across M8 / M8-off / tree) are standing gates.
+Reproduction:
+
+```bash
+export JAVA_HOME=/path/to/jdk-21
+./gradlew :jolt-bench:jmhJar
+$JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*M8Tracer.*" -prof gc -wi 5 -i 5 -f 3
+$JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*GapDissection.*" -prof gc -wi 5 -i 5 -f 3
+```
+
+### Generated binders (jolt-gen, M4 + M5 + M7 + M8)
 
 An optional module that runtime-generates a dedicated binder class per target type via
-ByteBuddy. Non-public targets fall back to the reflective binder. Since M5 the generated
+ByteBuddy. Non-public targets fall back to the reflective binder — as do public targets the
+capability predicate refuses (a non-public reference component type keeps the WHOLE type on
+the reflective arm, never a half-generated class; #53). Since M5 the generated
 parse/write bodies are **straight-line per-component bytecode** — accessor/field-name
 constants baked in, strict tag checks with direct Node-reader calls, cached child binders for
 nested record/POJO components — no metadata arrays and no per-call property-name derivation
@@ -170,8 +212,17 @@ strict scalar reads through the shared error helpers, and DIRECT construction: N
 per-parameter stack passing + INVOKESPECIAL canonical, no args array, no constructor-path
 boxing) and `write`. The declaration is the capability flag: a record/POJO whose component
 types are all public and emittable gets the direct read; non-public component types keep
-the whole type on the reflective arm. Records and POJOs both get the treatment; collection
-components read through the shared Plan-driven value read (one door call per value).
+the whole type on the reflective arm. Records and POJOs both get the treatment. Since M8,
+collection components DECOMPOSE at generation time: a shape the inliner supports
+(`List<X>`, `Map<String,X>`, reference-component arrays, nested to any depth; scalars,
+enums, record/POJO element children through the monomorphic child body) emits its element
+loop INTO the parent body — no per-value door call; everything else (untyped/natural
+elements, wildcards, non-String keys, polymorphic, non-public or non-capable element
+classes, primitive-component arrays) keeps the shared Plan-driven door. Field matching uses
+pre-encoded `FieldName` keys (the M8-T0 dissection's #1 cost was the String overload's
+single-entry cache thrash — 47–53% of read time). `GeneratedBinders.referenceForType`
+emits the M7-form body (String chain + door calls) under the `Gen$Ref$` namespace as a
+benchmark-only comparator arm — never registered with the facade.
 
 ```java
 import io.github.chutian0610.jolt.gen.GeneratedBinders;
