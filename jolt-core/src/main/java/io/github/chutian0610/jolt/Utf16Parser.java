@@ -38,6 +38,10 @@ public final class Utf16Parser implements JoltParser {
     // Grown on demand (doubling, capped at maxDepth) so a huge configured limit never
     // pre-allocates a huge array up front.
     private byte[] containerStack;
+    // Mirror of containerStack[depth - 1] (the M9-T1 per-token lever: the ',' closer-choice and
+    // closeContainer's top check stop paying the array deref per token). Undefined at depth 0;
+    // every reader runs at depth >= 1.
+    private byte containerTop;
 
     private int pos;
     private int depth;
@@ -93,6 +97,7 @@ public final class Utf16Parser implements JoltParser {
         this.json = json.toCharArray();
         this.pos = 0;
         this.depth = 0;
+        this.containerTop = 0;
         this.state = ST_TOP_VALUE;
         this.valueStart = 0;
         this.valueEnd = 0;
@@ -120,21 +125,34 @@ public final class Utf16Parser implements JoltParser {
         return t;
     }
 
+    /**
+     * Fetches the next token. The M9-T1 per-token lever (T0 lever #1), mirroring
+     * {@link Utf8Parser}: whitespace skipping is merged into the dispatch load — one bounds
+     * check and one load per token, the loaded char itself peeling the (compact-corpus empty)
+     * whitespace run — instead of the previous skipWhitespace probe plus redundant re-check and
+     * re-load. The ',' and ':' arms keep the loop-back, which now costs exactly this one fetch.
+     */
     private Token nextTokenInternal() {
         while (true) {
-            skipWhitespace();
-            tokenStart = pos;
             if (pos >= json.length) {
-                if (state == ST_TOP_AFTER) {
-                    state = ST_TOP_DONE;
-                    return Token.EOF;
-                }
-                if (state == ST_TOP_DONE) {
-                    return Token.EOF;
-                }
-                return failToken("Unexpected end of input");
+                return endOfInput();
             }
             char c = json[pos];
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+                pos++;
+                while (pos < json.length) {
+                    c = json[pos];
+                    if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+                        break;
+                    }
+                    pos++;
+                }
+                if (pos >= json.length) {
+                    return endOfInput();
+                }
+                c = json[pos];
+            }
+            tokenStart = pos;
             pos++;
             switch (c) {
                 case '{' -> {
@@ -233,6 +251,19 @@ public final class Utf16Parser implements JoltParser {
                 }
             }
         }
+    }
+
+    /** EOF handling at the exhausted cursor (mirrors Utf8Parser). */
+    private Token endOfInput() {
+        tokenStart = pos;
+        if (state == ST_TOP_AFTER) {
+            state = ST_TOP_DONE;
+            return Token.EOF;
+        }
+        if (state == ST_TOP_DONE) {
+            return Token.EOF;
+        }
+        return failToken("Unexpected end of input");
     }
 
     /** Drains to EOF for the tryParse facade; never throws. */
@@ -587,16 +618,18 @@ public final class Utf16Parser implements JoltParser {
         }
         containerStack[depth] = (byte) container;
         depth++;
+        containerTop = (byte) container;
         return true;
     }
 
     private void pop() {
         depth--;
+        containerTop = (depth == 0) ? (byte) 0 : containerStack[depth - 1];
         state = afterValue();
     }
 
     private byte top() {
-        return containerStack[depth - 1];
+        return containerTop;
     }
 
     // --- scanners ---
@@ -769,17 +802,6 @@ public final class Utf16Parser implements JoltParser {
 
     private static boolean isDigit(char c) {
         return c >= '0' && c <= '9';
-    }
-
-    private void skipWhitespace() {
-        while (pos < json.length) {
-            char c = json[pos];
-            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
-                pos++;
-            } else {
-                return;
-            }
-        }
     }
 
     // --- error-code plumbing (ADR-0005) ---
