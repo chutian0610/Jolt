@@ -3,6 +3,9 @@ dependencies {
     implementation(project(":jolt-tree"))
     implementation(project(":jolt-bind"))
     implementation(project(":jolt-gen"))
+    // The third engine's gates live here (the corpus machinery's home). The containment rule
+    // holds: core/tree/bind/gen never see jolt-simd; the gates module carries the incubator flag.
+    implementation(project(":jolt-simd"))
     testImplementation(testFixtures(project(":jolt-bind")))
 
     testImplementation(platform("org.junit:junit-bom:5.11.4"))
@@ -54,6 +57,7 @@ tasks.test {
     useJUnitPlatform {
         excludeTags("json-test-suite")
     }
+    jvmArgs("--add-modules", "jdk.incubator.vector")
 }
 
 tasks.register<Test>("jsonTestSuiteTest") {
@@ -65,6 +69,7 @@ tasks.register<Test>("jsonTestSuiteTest") {
     useJUnitPlatform {
         includeTags("json-test-suite")
     }
+    jvmArgs("--add-modules", "jdk.incubator.vector")
     systemProperty("jolt.jsontestsuite.dir", jsonTestSuiteDir.get().asFile.absolutePath)
 }
 

@@ -280,6 +280,50 @@ $JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar "CompetitorBenchmark.*"
 $JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar "ZeroAllocBenchmark.reusedInstanceTokenDrain" -prof gc -wi 5 -i 5 -f 2
 ```
 
+## jolt-simd (M9, experimental — parked)
+
+`jolt-simd` is an optional module holding `SimdUtf8Parser`: a full UTF-8 parser (a third engine
+under the same parity gates as the two core engines) that runs the two vectorizable shapes the
+M9 scanner dissection identified — the string-span clean run and whitespace runs — on the
+JDK Vector API. The token dispatch, numbers and literals stay scalar (no vector shape exists
+for a branchy one-byte-lookahead state machine).
+
+**It is not shipped.** The module was built under a win-to-ship rule pinned before any code
+existed: the SIMD engine's in-run token drain must beat the scalar floor by ≥ 1.15× on the
+compact fixture corpus (both drains), or it records the honest negative result and stays out
+of the release. Two independent in-run A/B runs (3 forks × 5×1s, `-prof gc`, Apple Silicon,
+Zulu 21):
+
+| Token drain | Scalar | SIMD | Ratio (run 1 / run 2) |
+|---|---|---|---|
+| POJO fixture (16 tokens, 77 B) | 8.59M / 8.61M ops/s | 8.71M / 8.71M ops/s | **1.01× / 1.01×** |
+| Graph fixture (52 tokens, 318 B) | 2.44M / 2.58M ops/s | 2.56M / 2.55M ops/s | **1.05× / 0.99×** |
+| Long strings (disclosure: 8 × 200-char values) | 0.96M / 0.99M ops/s | 4.52M / 4.40M ops/s | 4.68× / 4.46× |
+
+Both compact drains sit at parity — bands overlap in both runs — against a 1.15× bar: the
+small-message scanner cost is per token, and the spans the vectors can compress are 2–6
+bytes. Where spans dominate (the disclosure row) the clean run is a 4.5× win; that is not
+the workload this library optimizes. Zero allocation holds on every arm (≈ 0 B/op — the
+vector mask chain is fully intrinsified in steady state).
+
+Using it anyway (UTF-8 engine only; the String engine stays scalar): every JVM that loads
+the engine needs `--add-modules jdk.incubator.vector`, and the core's one hook routes the
+`JoltParser`-typed UTF-8 entries (`parse`, `tryParse`, the `InputStream` adapters) to it:
+
+```java
+Jolt.installUtf8ParserFactory(SimdUtf8Parser.factory());   // default: the scalar engine
+JoltParser p = Jolt.parse(bytes);                          // now a SimdUtf8Parser
+```
+
+The concrete reuse entry `Jolt.utf8Parser` stays scalar by contract (its `reset` type cannot
+be honored by a factory-produced engine); construct `new SimdUtf8Parser(bytes)` and `reset`
+it directly for the reuse shape. Reproduce the A/B:
+
+```bash
+./gradlew :jolt-bench:jmhJar
+$JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*SimdDissection.*" -prof gc
+```
+
 ## Correctness
 
 Every commit runs a ~1,560-case verification gate in CI:
@@ -304,7 +348,9 @@ Every commit runs a ~1,560-case verification gate in CI:
 ./gradlew :jolt-bench:jmh              # benchmarks
 ```
 
-Modules: `jolt-core` (streaming parser + writer, zero dependencies), `jolt-bench` (JMH),
+Modules: `jolt-core` (streaming parser + writer, zero dependencies), `jolt-tree` (document
+model), `jolt-bind` (binding facade), `jolt-gen` (generated binders), `jolt-simd` (the parked
+Vector-API engine — needs `--add-modules jdk.incubator.vector`), `jolt-bench` (JMH),
 `jolt-test` (corpus + differential gates).
 
 ## Design

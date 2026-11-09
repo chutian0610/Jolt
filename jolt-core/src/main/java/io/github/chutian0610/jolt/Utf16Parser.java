@@ -267,7 +267,8 @@ public final class Utf16Parser implements JoltParser {
     }
 
     /** Drains to EOF for the tryParse facade; never throws. */
-    ParseResult drainOrFailure() {
+    @Override
+    public ParseResult drainOrFailure() {
         while (true) {
             Token t = nextTokenInternal();
             if (t == null) {

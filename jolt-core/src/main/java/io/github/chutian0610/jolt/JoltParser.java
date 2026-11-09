@@ -22,6 +22,15 @@ public interface JoltParser {
     Token nextToken();
 
     /**
+     * Drains the document to EOF without exceptions — the {@code tryParse} facade's engine
+     * side. Returns the shared success sentinel on a fully-valid document, or a failure whose
+     * diagnostics are identical to what {@link #nextToken()} would have thrown at the boundary
+     * (ADR-0005). Public so every engine — including one produced by an installed parser
+     * factory — can serve the tryParse entry points.
+     */
+    ParseResult drainOrFailure();
+
+    /**
      * Skips the children of the most recent container token in one call (a no-op returning the
      * current token for scalars and closers). Skipping decodes nothing — lazy materialization.
      * After skipping, the span readers address the whole container's raw source text.

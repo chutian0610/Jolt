@@ -17,6 +17,7 @@ jmh {
 
 dependencies {
     implementation(project(":jolt-core"))
+    implementation(project(":jolt-simd"))
     implementation(project(":jolt-tree"))
     implementation(project(":jolt-bind"))
     implementation(project(":jolt-gen"))
