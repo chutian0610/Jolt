@@ -725,8 +725,6 @@ final class RecordSpecializer {
 
             Label loopHead = new Label();
             Label sweep = new Label();
-            Label drainHead = new Label();
-            Label drained = new Label();
 
             // entry: the root form resets the shared path (the nested form inherits the
             // caller's path position); both zero the pooled seen flags and default every
@@ -796,51 +794,13 @@ final class RecordSpecializer {
                 }
             }
 
-            // the field loop
-            mv.visitLabel(loopHead);
-            slots.emit(mv);
-            mv.visitVarInsn(Opcodes.ALOAD, 1);
-            mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
-                    PARSER_NEXT_TOKEN_DESC, true);
-            mv.visitVarInsn(Opcodes.ASTORE, TOKEN);
-            mv.visitVarInsn(Opcodes.ALOAD, TOKEN);
-            mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "END_OBJECT", TOKEN_DESC);
-            mv.visitJumpInsn(Opcodes.IF_ACMPEQ, sweep);
-
-            // the inline match chain: the M8 form compares against the baked FieldName keys
-            // (never re-encodes — the dissection's #1 fix, #55); the reference form (M8-off,
-            // the gate comparator) keeps the M7 String chain through the frozen overload
-            Label[] matched = new Label[n];
-            for (int i = 0; i < n; i++) {
-                matched[i] = new Label();
-                mv.visitVarInsn(Opcodes.ALOAD, 1);
-                if (referenceForm) {
-                    mv.visitLdcInsn(plan.names[i]);
-                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
-                            PARSER_FIELD_NAME_EQUALS_DESC, true);
-                } else {
-                    mv.visitVarInsn(Opcodes.ALOAD, 0);
-                    mv.visitFieldInsn(Opcodes.GETFIELD, self, Emit.FIELD_NAME_FIELD_PREFIX + i,
-                            Emit.FIELD_NAME_DESC);
-                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
-                            Emit.PARSER_FIELD_NAME_EQUALS_KEY_DESC, true);
-                }
-                mv.visitJumpInsn(Opcodes.IFNE, matched[i]);
-            }
-            // unknown field: note (strict mode) + skip, one shared call
-            mv.visitVarInsn(Opcodes.ALOAD, 1);
-            mv.visitVarInsn(Opcodes.ALOAD, 2);
-            mv.visitVarInsn(Opcodes.ALOAD, UNKNOWN);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "skipOrNoteUnknown",
-                    "(Lio/github/chutian0610/jolt/JoltParser;"
-                            + "Lio/github/chutian0610/jolt/bind/BindConfig;"
-                            + "Ljava/lang/String;)Ljava/lang/String;", false);
-            mv.visitVarInsn(Opcodes.ASTORE, UNKNOWN);
-            mv.visitJumpInsn(Opcodes.GOTO, loopHead);
-
-            for (int i = 0; i < n; i++) {
-                emitComponent(mv, slots, i, matched[i], n, loopHead);
-            }
+            DirectBodies.LoopContext loop = new DirectBodies.LoopContext(slots, self,
+                    VALUE_TOKEN, TEXT, carrierSlot(), scratchSlot(), n, TOKEN, THROWABLE,
+                    ERRORS, UNKNOWN, SEEN, carrierSlot(), componentDepthSlot(), RESULT,
+                    referenceForm, j -> plan.names[j], inline);
+            DirectBodies.emitFieldLoop(mv, loop, loopHead, sweep,
+                    i -> new DirectBodies.Slot(slotOf(i), rawOf(plan.genericTypes[i]),
+                            RecordSpecializer.isDirectCapable(rawOf(plan.genericTypes[i]))));
 
             // the declaration-order sweep through the shared helper (the baked arrays)
             mv.visitLabel(sweep);
@@ -885,30 +845,9 @@ final class RecordSpecializer {
                 mv.visitVarInsn(Opcodes.ALOAD, RESULT);
                 mv.visitInsn(Opcodes.ARETURN);
             } else {
-                // the root form's drain runs exactly when the root was an object: the
-                // loop-exit token in slot 6 is END_OBJECT only on that path (a non-object
-                // root leaves its own token there and returns without draining — the
-                // reflective arm's shape); parser syntax errors in the tail surface
-                // unchanged
-                mv.visitVarInsn(Opcodes.ALOAD, TOKEN);
-                mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "END_OBJECT", TOKEN_DESC);
-                mv.visitJumpInsn(Opcodes.IF_ACMPEQ, drainHead);
-                mv.visitVarInsn(Opcodes.ALOAD, RESULT);
-                mv.visitInsn(Opcodes.ARETURN);
-
-                mv.visitLabel(drainHead);
-                slots.emit(mv);
-                mv.visitVarInsn(Opcodes.ALOAD, 1);
-                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
-                        PARSER_NEXT_TOKEN_DESC, true);
-                mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "EOF", TOKEN_DESC);
-                mv.visitJumpInsn(Opcodes.IF_ACMPEQ, drained);
-                mv.visitJumpInsn(Opcodes.GOTO, drainHead);
-
-                mv.visitLabel(drained);
-                slots.emit(mv);
-                mv.visitVarInsn(Opcodes.ALOAD, RESULT);
-                mv.visitInsn(Opcodes.ARETURN);
+                // the root form's drain runs exactly when the root was an object (the
+                // loop-exit token); tail syntax errors surface unchanged
+                DirectBodies.emitDrain(mv, loop);
             }
 
             mv.visitLabel(rejected);
@@ -926,89 +865,6 @@ final class RecordSpecializer {
                 widths += slotWidth(rawOf(plan.genericTypes[i]));
             }
             return new Size(Math.max(10, 2 + widths), maxLocals() + extraLocals());
-        }
-
-        /** One matched component: seen flag, path push, the guarded read, the shared slot
-         * note on failure, the path pop — then back to the field loop. The M8 form threads
-         * the resolved carrier and, for an inlined collection, saves the path depth after
-         * the push so its handler can recover the cursor and the carrier in one call. */
-        private void emitComponent(MethodVisitor mv, Emit.FrameTracker slots, int i,
-                                   Label matched, int n, Label loopHead) {
-            Class<?> raw = rawOf(plan.genericTypes[i]);
-            int slot = slotOf(i);
-            mv.visitLabel(matched);
-            slots.emit(mv);
-
-            Label tryStart = new Label();
-            Label tryEnd = new Label();
-            Label join = new Label();
-            Label handler = new Label();
-            mv.visitVarInsn(Opcodes.ALOAD, SEEN);
-            pushIndex(mv, i);
-            mv.visitInsn(Opcodes.ICONST_1);
-            mv.visitInsn(Opcodes.BASTORE);
-            if (referenceForm) {
-                mv.visitLdcInsn(plan.names[i]);
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
-                        "(Ljava/lang/String;)V", false);
-            } else {
-                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
-                mv.visitLdcInsn(plan.names[i]);
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
-                        "(Ljava/lang/Object;Ljava/lang/String;)V", false);
-            }
-            if (inline[i] != null) {
-                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "carrierDepth",
-                        "(Ljava/lang/Object;)I", false);
-                mv.visitVarInsn(Opcodes.ISTORE, componentDepthSlot());
-            }
-            mv.visitVarInsn(Opcodes.ALOAD, 1);
-            mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
-                    PARSER_NEXT_TOKEN_DESC, true);
-            mv.visitVarInsn(Opcodes.ASTORE, VALUE_TOKEN);
-
-            mv.visitTryCatchBlock(tryStart, tryEnd, handler, BIND_EXCEPTION);
-            mv.visitLabel(tryStart);
-            DirectBodies.emitValue(mv, new DirectBodies.ReadContext(slots, self,
-                    VALUE_TOKEN, TEXT, carrierSlot(), scratchSlot()), i, inline[i],
-                    new DirectBodies.Slot(slot, raw, join, tryEnd,
-                            RecordSpecializer.isDirectCapable(raw)));
-            mv.visitLabel(tryEnd);
-            slots.emit(mv);
-            mv.visitJumpInsn(Opcodes.GOTO, join);
-            mv.visitLabel(handler);
-            slots.emit(mv, BIND_EXCEPTION);
-            mv.visitVarInsn(Opcodes.ASTORE, THROWABLE);
-            if (inline[i] != null) {
-                // the failure may have left the cursor inside the inlined containers —
-                // drain exactly as many closers as segments the loops pushed, restore the
-                // carrier (the door's #61 recovery, one handler for any nesting)
-                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
-                mv.visitVarInsn(Opcodes.ILOAD, componentDepthSlot());
-                mv.visitVarInsn(Opcodes.ALOAD, 1);
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "recoverCollection",
-                        "(Ljava/lang/Object;ILio/github/chutian0610/jolt/JoltParser;)V", false);
-            }
-            mv.visitVarInsn(Opcodes.ALOAD, ERRORS);
-            pushIndex(mv, i);
-            mv.visitVarInsn(Opcodes.ALOAD, THROWABLE);
-            pushIndex(mv, n);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "noteError",
-                    "([Ljava/lang/Object;ILio/github/chutian0610/jolt/bind/JsonBindException;"
-                            + "I)[Ljava/lang/Object;", false);
-            mv.visitVarInsn(Opcodes.ASTORE, ERRORS);
-
-            mv.visitLabel(join);
-            slots.emit(mv);
-            if (referenceForm) {
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop", "()V", false);
-            } else {
-                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop",
-                        "(Ljava/lang/Object;)V", false);
-            }
-            mv.visitJumpInsn(Opcodes.GOTO, loopHead);
         }
 
         private static void nullStore(MethodVisitor mv, int slot) {

@@ -38,20 +38,11 @@ public final class GeneratedBinders {
 
     /** The generated binder for {@code type}, cached per class (JVM-lifetime, strong refs). */
     public static <T> TypedBinder<T> forType(Class<T> type) {
-        TypedBinder<T> cached = cast(CACHE.get(type));
-        if (cached != null) {
-            return cached;
-        }
-        synchronized (CACHE) {
-            cached = cast(CACHE.get(type));
-            if (cached != null) {
-                return cached;
-            }
-            cached = create(type, true, false);
-            CACHE.put(type, cached);
-            io.github.chutian0610.jolt.bind.Bind.registerGenerated(type, cached);
-            return cached;
-        }
+        return BinderCaches.getOrCreate(CACHE, type, t -> {
+            TypedBinder<T> binder = create(t, true, false);
+            io.github.chutian0610.jolt.bind.Bind.registerGenerated(t, binder);
+            return binder;
+        });
     }
 
     /**
@@ -63,19 +54,7 @@ public final class GeneratedBinders {
      * uses — the arm isolates the plan-executor layer, not the full M4 stack.
      */
     public static <T> TypedBinder<T> planCachedForType(Class<T> type) {
-        TypedBinder<T> cached = cast(PLAN_CACHE.get(type));
-        if (cached != null) {
-            return cached;
-        }
-        synchronized (PLAN_CACHE) {
-            cached = cast(PLAN_CACHE.get(type));
-            if (cached != null) {
-                return cached;
-            }
-            cached = create(type, false, false);
-            PLAN_CACHE.put(type, cached);
-            return cached;
-        }
+        return BinderCaches.getOrCreate(PLAN_CACHE, type, t -> create(t, false, false));
     }
 
     /**
@@ -90,19 +69,7 @@ public final class GeneratedBinders {
      * silently degrading the arm — a benchmark must not measure a fallback unawares).
      */
     public static <T> TypedBinder<T> referenceForType(Class<T> type) {
-        TypedBinder<T> cached = cast(REF_CACHE.get(type));
-        if (cached != null) {
-            return cached;
-        }
-        synchronized (REF_CACHE) {
-            cached = cast(REF_CACHE.get(type));
-            if (cached != null) {
-                return cached;
-            }
-            cached = create(type, true, true);
-            REF_CACHE.put(type, cached);
-            return cached;
-        }
+        return BinderCaches.getOrCreate(REF_CACHE, type, t -> create(t, true, true));
     }
 
     /** The generated binder for {@code type} if one exists, else null (nested routing). */

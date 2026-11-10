@@ -10,7 +10,14 @@ import java.lang.reflect.Method;
 import static io.github.chutian0610.jolt.gen.Emit.CHILD_FIELD_PREFIX;
 import static io.github.chutian0610.jolt.gen.Emit.DIRECT_SUPPORT;
 import static io.github.chutian0610.jolt.gen.Emit.GEN_BASE;
+import static io.github.chutian0610.jolt.gen.Emit.BIND_EXCEPTION;
+import static io.github.chutian0610.jolt.gen.Emit.FIELD_NAME_DESC;
+import static io.github.chutian0610.jolt.gen.Emit.FIELD_NAME_FIELD_PREFIX;
 import static io.github.chutian0610.jolt.gen.Emit.GEN_BASE_PARSE_TOKENS_BODY_DESC;
+import static io.github.chutian0610.jolt.gen.Emit.PARSER_FIELD_NAME_EQUALS_DESC;
+import static io.github.chutian0610.jolt.gen.Emit.PARSER_FIELD_NAME_EQUALS_KEY_DESC;
+import static io.github.chutian0610.jolt.gen.Emit.PARSER_NEXT_TOKEN_DESC;
+import static io.github.chutian0610.jolt.gen.Emit.pushIndex;
 import static io.github.chutian0610.jolt.gen.Emit.Kind;
 import static io.github.chutian0610.jolt.gen.Emit.NESTED_BODY_DESC;
 import static io.github.chutian0610.jolt.gen.Emit.PARSER;
@@ -77,12 +84,14 @@ final class DirectBodies {
          * the component's own primitive-ness. */
         boolean boxes();
 
-        /** The value is on the stack in its delivery form: consume it and end the read. */
-        void deliver(MethodVisitor mv, ReadContext cx);
+        /** The value is on the stack in its delivery form: consume it and end the read —
+         * jumping the arm's try end (the labels are the arm's; the arm owns the control
+         * flow). */
+        void deliver(MethodVisitor mv, ReadContext cx, Label tryEnd, Label join);
 
         /** The JSON-null edge for a reference component (the frame is already emitted):
          * bind null / raise. Only reached when the raw kind is not primitive. */
-        void deliverNull(MethodVisitor mv, ReadContext cx);
+        void deliverNull(MethodVisitor mv, ReadContext cx, Label tryEnd, Label join);
 
         /** The CHILD-kind dispatch decision, owned by the caller: a record parent consults
          * the record predicate (false for POJO children — they bind through the door), a
@@ -92,8 +101,7 @@ final class DirectBodies {
     }
 
     /** A body's typed local: the value is stored and control jumps the read's try end. */
-    record Slot(int slot, Class<?> raw, Label join, Label tryEnd,
-                boolean childCapable) implements ValueTarget {
+    record Slot(int slot, Class<?> raw, boolean childCapable) implements ValueTarget {
 
         @Override
         public Object[] stackBase() {
@@ -111,20 +119,20 @@ final class DirectBodies {
         }
 
         @Override
-        public void deliver(MethodVisitor mv, ReadContext cx) {
+        public void deliver(MethodVisitor mv, ReadContext cx, Label tryEnd, Label join) {
             store(mv, slot, raw);
             mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
         }
 
         @Override
-        public void deliverNull(MethodVisitor mv, ReadContext cx) {
+        public void deliverNull(MethodVisitor mv, ReadContext cx, Label tryEnd, Label join) {
             mv.visitJumpInsn(Opcodes.GOTO, join);
         }
     }
 
     /** A POJO setter: the receiver sits under the value; the guarded invoke consumes both. */
     record Setter(Method setter, String name, Class<?> raw, String pojoInternal,
-                  int instance, int setterThrowable, Label tryEnd, Object[] stackBase,
+                  int instance, int setterThrowable, Object[] stackBase,
                   boolean childCapable) implements ValueTarget {
 
         @Override
@@ -148,13 +156,13 @@ final class DirectBodies {
         }
 
         @Override
-        public void deliver(MethodVisitor mv, ReadContext cx) {
+        public void deliver(MethodVisitor mv, ReadContext cx, Label tryEnd, Label join) {
             invokeSetter(mv, cx, this);
             mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
         }
 
         @Override
-        public void deliverNull(MethodVisitor mv, ReadContext cx) {
+        public void deliverNull(MethodVisitor mv, ReadContext cx, Label tryEnd, Label join) {
             mv.visitInsn(Opcodes.ACONST_NULL);
             invokeSetter(mv, cx, this);
             // the null path joins the value path explicitly — falling straight into the
@@ -184,12 +192,12 @@ final class DirectBodies {
         }
 
         @Override
-        public void deliver(MethodVisitor mv, ReadContext cx) {
+        public void deliver(MethodVisitor mv, ReadContext cx, Label tryEnd, Label join) {
             mv.visitJumpInsn(Opcodes.GOTO, exit);
         }
 
         @Override
-        public void deliverNull(MethodVisitor mv, ReadContext cx) {
+        public void deliverNull(MethodVisitor mv, ReadContext cx, Label tryEnd, Label join) {
             mv.visitInsn(Opcodes.ACONST_NULL);
             // control falls to the caller's done join, which declares the Object stack
         }
@@ -201,7 +209,8 @@ final class DirectBodies {
      * beneath everything). Postcondition: control has left through the target's delivery.
      */
     static void emitValue(MethodVisitor mv, ReadContext cx, int component,
-                          InlineCollections.Shape inline, ValueTarget t) {
+                          InlineCollections.Shape inline, ValueTarget t,
+                          Label tryEnd, Label join) {
         Class<?> raw = t.raw();
         boolean primitive = raw.isPrimitive();
         Label nullEdge = new Label();
@@ -214,13 +223,13 @@ final class DirectBodies {
                 mv.visitVarInsn(Opcodes.ALOAD, 1);
                 mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "textValue",
                         PARSER_TEXT_VALUE_DESC, true);
-                t.deliver(mv, cx);
+                t.deliver(mv, cx, tryEnd, join);
             }
-            case BOOLEAN -> emitBoolean(mv, cx, t, raw);
-            case NUMBER -> emitNumber(mv, cx, t, raw);
-            case ENUM -> emitEnum(mv, cx, t, raw);
-            case CHILD -> emitChild(mv, cx, component, t, raw);
-            case GENERIC -> emitGeneric(mv, cx, component, inline, t, raw);
+            case BOOLEAN -> emitBoolean(mv, cx, t, raw, tryEnd, join);
+            case NUMBER -> emitNumber(mv, cx, t, raw, tryEnd, join);
+            case ENUM -> emitEnum(mv, cx, t, raw, tryEnd, join);
+            case CHILD -> emitChild(mv, cx, component, t, raw, tryEnd, join);
+            case GENERIC -> emitGeneric(mv, cx, component, inline, t, raw, tryEnd, join);
             default -> throw new IllegalStateException(
                     "component " + component + " is not a direct-read shape");
         }
@@ -233,14 +242,14 @@ final class DirectBodies {
                     "(Ljava/lang/String;)Ljava/lang/RuntimeException;", false);
             mv.visitInsn(Opcodes.ATHROW);
         } else {
-            t.deliverNull(mv, cx);
+            t.deliverNull(mv, cx, tryEnd, join);
         }
     }
 
     // --- the kind reads ---------------------------------------------------------------
 
     private static void emitBoolean(MethodVisitor mv, ReadContext cx, ValueTarget t,
-                                    Class<?> raw) {
+                                    Class<?> raw, Label tryEnd, Label join) {
         Label trueEdge = new Label();
         Label falseEdge = new Label();
         Label valueReady = t.joins() ? new Label() : null;
@@ -257,7 +266,7 @@ final class DirectBodies {
         if (t.joins()) {
             mv.visitJumpInsn(Opcodes.GOTO, valueReady);
         } else {
-            t.deliver(mv, cx);
+            t.deliver(mv, cx, tryEnd, join);
         }
         mv.visitLabel(falseEdge);
         frames(mv, cx, t);
@@ -266,11 +275,11 @@ final class DirectBodies {
             mv.visitLabel(valueReady);
             frames(mv, cx, t, valueFrameType(raw));
         }
-        t.deliver(mv, cx);
+        t.deliver(mv, cx, tryEnd, join);
     }
 
     private static void emitEnum(MethodVisitor mv, ReadContext cx, ValueTarget t,
-                                 Class<?> raw) {
+                                 Class<?> raw, Label tryEnd, Label join) {
         requireToken(mv, cx, t, "VALUE_STRING", "a string");
         mv.visitVarInsn(Opcodes.ALOAD, 1);
         mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "textValue",
@@ -291,7 +300,7 @@ final class DirectBodies {
         if (t.joins()) {
             mv.visitJumpInsn(Opcodes.GOTO, done);
         } else {
-            t.deliver(mv, cx);
+            t.deliver(mv, cx, tryEnd, join);
         }
         mv.visitLabel(lossy);
         // the handler's entry stack is CLEARED (the locals stay declared) — no receiver
@@ -307,12 +316,12 @@ final class DirectBodies {
         if (t.joins()) {
             mv.visitLabel(done);
             frames(mv, cx, t, valueFrameType(raw));
-            t.deliver(mv, cx);
+            t.deliver(mv, cx, tryEnd, join);
         }
     }
 
     private static void emitChild(MethodVisitor mv, ReadContext cx, int component,
-                                  ValueTarget t, Class<?> raw) {
+                                  ValueTarget t, Class<?> raw, Label tryEnd, Label join) {
         // the capability decision belongs to the caller: a record parent consults the
         // record predicate (false for POJO children — they bind through the door), a POJO
         // parent dispatches per the child's own shape. NOT one rule (the three-grade
@@ -337,18 +346,18 @@ final class DirectBodies {
                     NESTED_BODY_DESC, false);
         }
         mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
-        t.deliver(mv, cx);
+        t.deliver(mv, cx, tryEnd, join);
     }
 
     private static void emitGeneric(MethodVisitor mv, ReadContext cx, int component,
                                     InlineCollections.Shape inline, ValueTarget t,
-                                    Class<?> raw) {
+                                    Class<?> raw, Label tryEnd, Label join) {
         if (inline != null) {
             InlineCollections.emit(mv, new InlineCollections.Body(cx.self(), cx.valueToken(),
                     cx.text(), cx.carrierSlot(), cx.scratchSlot(), cx.slots()),
                     inline, component, t.stackBase());
             mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
-            t.deliver(mv, cx);
+            t.deliver(mv, cx, tryEnd, join);
             return;
         }
         mv.visitVarInsn(Opcodes.ALOAD, 1);
@@ -364,14 +373,14 @@ final class DirectBodies {
                         + "Lio/github/chutian0610/jolt/bind/BindConfig;"
                         + ")Ljava/lang/Object;", false);
         mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
-        t.deliver(mv, cx);
+        t.deliver(mv, cx, tryEnd, join);
     }
 
     /** The numeric family: the decimal reads share the requireNumber + bigDecimalValue
      * prefix; the integral family runs the shared checked long read and the M5 all-stack
      * bound dance (each throw edge declares the stack ITS edge leaves). */
     private static void emitNumber(MethodVisitor mv, ReadContext cx, ValueTarget t,
-                                   Class<?> raw) {
+                                   Class<?> raw, Label tryEnd, Label join) {
         boolean integral = raw == byte.class || raw == short.class || raw == int.class
                 || raw == long.class || raw == Byte.class || raw == Short.class
                 || raw == Integer.class || raw == Long.class;
@@ -386,22 +395,22 @@ final class DirectBodies {
                 mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/math/BigDecimal",
                         "floatValue", "()F", false);
                 boxIfNeeded(mv, t, raw);
-                t.deliver(mv, cx);
+                t.deliver(mv, cx, tryEnd, join);
             }
             case "double", "java.lang.Double" -> {
                 mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/math/BigDecimal",
                         "doubleValue", "()D", false);
                 boxIfNeeded(mv, t, raw);
-                t.deliver(mv, cx);
+                t.deliver(mv, cx, tryEnd, join);
             }
-            case "java.math.BigDecimal" -> t.deliver(mv, cx);
-            case "java.math.BigInteger" -> emitBigInteger(mv, cx, t, raw);
-            default -> emitIntegral(mv, cx, t, raw);
+            case "java.math.BigDecimal" -> t.deliver(mv, cx, tryEnd, join);
+            case "java.math.BigInteger" -> emitBigInteger(mv, cx, t, raw, tryEnd, join);
+            default -> emitIntegral(mv, cx, t, raw, tryEnd, join);
         }
     }
 
     private static void emitBigInteger(MethodVisitor mv, ReadContext cx, ValueTarget t,
-                                       Class<?> raw) {
+                                       Class<?> raw, Label tryEnd, Label join) {
         Label tryStart = new Label();
         Label exact = new Label();
         Label lossy = new Label();
@@ -414,7 +423,7 @@ final class DirectBodies {
         if (t.joins()) {
             mv.visitJumpInsn(Opcodes.GOTO, done);
         } else {
-            t.deliver(mv, cx);
+            t.deliver(mv, cx, tryEnd, join);
         }
         mv.visitLabel(lossy);
         // the handler's entry stack is CLEARED (the locals stay declared) — no receiver
@@ -426,7 +435,7 @@ final class DirectBodies {
         if (t.joins()) {
             mv.visitLabel(done);
             frames(mv, cx, t, internal(raw));
-            t.deliver(mv, cx);
+            t.deliver(mv, cx, tryEnd, join);
         }
     }
 
@@ -434,7 +443,7 @@ final class DirectBodies {
      * (no long locals — the two throw edges declare their own stack depths), the narrowing
      * conversion, and the delivery. */
     private static void emitIntegral(MethodVisitor mv, ReadContext cx, ValueTarget t,
-                                     Class<?> raw) {
+                                     Class<?> raw, Label tryEnd, Label join) {
         mv.visitVarInsn(Opcodes.ALOAD, 1);
         mv.visitVarInsn(Opcodes.ALOAD, cx.valueToken());
         mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "readLongChecked",
@@ -443,7 +452,7 @@ final class DirectBodies {
         long bound = boundOf(raw);
         if (bound == Long.MAX_VALUE) {
             boxIfNeeded(mv, t, raw);
-            t.deliver(mv, cx);
+            t.deliver(mv, cx, tryEnd, join);
             return;
         }
         Label overFirst = new Label();
@@ -481,7 +490,7 @@ final class DirectBodies {
             default -> { }
         }
         boxIfNeeded(mv, t, raw);
-        t.deliver(mv, cx);
+        t.deliver(mv, cx, tryEnd, join);
     }
 
     // --- the shared scaffolding ---------------------------------------------------------
@@ -623,5 +632,192 @@ final class DirectBodies {
         } else {
             cx.slots().emit(mv, withStack(t.stackBase(), stack));
         }
+    }
+
+    // --- the field-loop scaffold (phase 2, #68) -----------------------------------------
+
+    /** The body-loop layout as data: the two bodies' slot numbers differ, the scaffold
+     * does not. {@code seen} is -1 for the POJO body (no seen array — its sweep is
+     * declaration-ordered through the setters). */
+    record LoopContext(Emit.FrameTracker slots, String self, int valueToken, int text,
+                       int carrierSlot, int scratchSlot, int n, int token, int throwable,
+                       int errors, int unknown, int seen, int carrier, int componentDepth,
+                       int result, boolean referenceForm,
+                       java.util.function.IntFunction<String> keyOf,
+                       InlineCollections.Shape[] inline) {
+        ReadContext read() {
+            return new ReadContext(slots, self, valueToken, text, carrierSlot, scratchSlot);
+        }
+    }
+
+    /**
+     * The field loop: the loop head, the END_OBJECT exit, the match chain (the M8 form
+     * against the baked FieldName keys — never re-encodes, the dissection's #1 fix, #55 —
+     * the reference form keeping the M7 String chain through the frozen overload), the
+     * unknown-field note, and one component arm per property (path push, the guarded read
+     * through {@link #emitValue}, the shared error note, the path pop). The caller owns
+     * the entry preamble, the root dispatch, the sweep bodies, the construction, and the
+     * drain (it invokes {@link #emitDrain} for the root form) — those are shape differences,
+     * not duplication.
+     */
+    static void emitFieldLoop(MethodVisitor mv, LoopContext cx, Label loopHead, Label sweep,
+                              java.util.function.IntFunction<ValueTarget> targetFor) {
+        int n = cx.n();
+        mv.visitLabel(loopHead);
+        cx.slots().emit(mv);
+        mv.visitVarInsn(Opcodes.ALOAD, 1);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
+                PARSER_NEXT_TOKEN_DESC, true);
+        mv.visitVarInsn(Opcodes.ASTORE, cx.token());
+        mv.visitVarInsn(Opcodes.ALOAD, cx.token());
+        mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "END_OBJECT", TOKEN_DESC);
+        mv.visitJumpInsn(Opcodes.IF_ACMPEQ, sweep);
+
+        Label[] matched = new Label[n];
+        for (int i = 0; i < n; i++) {
+            matched[i] = new Label();
+            mv.visitVarInsn(Opcodes.ALOAD, 1);
+            if (cx.referenceForm()) {
+                mv.visitLdcInsn(cx.keyOf().apply(i));
+                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
+                        PARSER_FIELD_NAME_EQUALS_DESC, true);
+            } else {
+                mv.visitVarInsn(Opcodes.ALOAD, 0);
+                mv.visitFieldInsn(Opcodes.GETFIELD, cx.self(),
+                        FIELD_NAME_FIELD_PREFIX + i, FIELD_NAME_DESC);
+                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
+                        PARSER_FIELD_NAME_EQUALS_KEY_DESC, true);
+            }
+            mv.visitJumpInsn(Opcodes.IFNE, matched[i]);
+        }
+        // unknown field: note (strict mode) + skip, one shared call
+        mv.visitVarInsn(Opcodes.ALOAD, 1);
+        mv.visitVarInsn(Opcodes.ALOAD, 2);
+        mv.visitVarInsn(Opcodes.ALOAD, cx.unknown());
+        mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "skipOrNoteUnknown",
+                "(Lio/github/chutian0610/jolt/JoltParser;"
+                        + "Lio/github/chutian0610/jolt/bind/BindConfig;"
+                        + "Ljava/lang/String;)Ljava/lang/String;", false);
+        mv.visitVarInsn(Opcodes.ASTORE, cx.unknown());
+        mv.visitJumpInsn(Opcodes.GOTO, loopHead);
+
+        for (int i = 0; i < n; i++) {
+            emitComponentArm(mv, cx, i, matched[i], n, loopHead, targetFor.apply(i));
+        }
+    }
+
+    /** One matched component: the seen flag (slot target bodies), the path push, the
+     * guarded read, the shared slot note on failure (with the inlined-collection cursor
+     * recovery — the door's #61 shape), the path pop — then back to the field loop. */
+    private static void emitComponentArm(MethodVisitor mv, LoopContext cx, int i,
+                                         Label matched, int n, Label loopHead,
+                                         ValueTarget t) {
+        mv.visitLabel(matched);
+        cx.slots().emit(mv);
+
+        Label tryStart = new Label();
+        Label tryEnd = new Label();
+        Label join = new Label();
+        Label handler = new Label();
+        if (cx.seen() >= 0) {
+            mv.visitVarInsn(Opcodes.ALOAD, cx.seen());
+            pushIndex(mv, i);
+            mv.visitInsn(Opcodes.ICONST_1);
+            mv.visitInsn(Opcodes.BASTORE);
+        }
+        if (cx.referenceForm()) {
+            mv.visitLdcInsn(cx.keyOf().apply(i));
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
+                    "(Ljava/lang/String;)V", false);
+        } else {
+            mv.visitVarInsn(Opcodes.ALOAD, cx.carrier());
+            mv.visitLdcInsn(cx.keyOf().apply(i));
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
+                    "(Ljava/lang/Object;Ljava/lang/String;)V", false);
+        }
+        if (cx.inline()[i] != null) {
+            mv.visitVarInsn(Opcodes.ALOAD, cx.carrier());
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "carrierDepth",
+                    "(Ljava/lang/Object;)I", false);
+            mv.visitVarInsn(Opcodes.ISTORE, cx.componentDepth());
+        }
+        mv.visitVarInsn(Opcodes.ALOAD, 1);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
+                PARSER_NEXT_TOKEN_DESC, true);
+        mv.visitVarInsn(Opcodes.ASTORE, cx.valueToken());
+
+        mv.visitTryCatchBlock(tryStart, tryEnd, handler, BIND_EXCEPTION);
+        mv.visitLabel(tryStart);
+        // the setter target's receiver sits UNDER everything the read produces — pushed
+        // here, declared by every frame the read emits (the M5 stackPrefix discipline)
+        if (t instanceof Setter setter) {
+            mv.visitVarInsn(Opcodes.ALOAD, setter.instance());
+        }
+        emitValue(mv, cx.read(), i, cx.inline()[i], t, tryEnd, join);
+        mv.visitLabel(tryEnd);
+        cx.slots().emit(mv);
+        mv.visitJumpInsn(Opcodes.GOTO, join);
+        mv.visitLabel(handler);
+        cx.slots().emit(mv, BIND_EXCEPTION);
+        mv.visitVarInsn(Opcodes.ASTORE, cx.throwable());
+        if (cx.inline()[i] != null) {
+            // the failure may have left the cursor inside the inlined containers —
+            // drain exactly as many closers as segments the loops pushed, restore the
+            // carrier (the door's #61 recovery, one handler for any nesting)
+            mv.visitVarInsn(Opcodes.ALOAD, cx.carrier());
+            mv.visitVarInsn(Opcodes.ILOAD, cx.componentDepth());
+            mv.visitVarInsn(Opcodes.ALOAD, 1);
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "recoverCollection",
+                    "(Ljava/lang/Object;ILio/github/chutian0610/jolt/JoltParser;)V", false);
+        }
+        mv.visitVarInsn(Opcodes.ALOAD, cx.errors());
+        pushIndex(mv, i);
+        mv.visitVarInsn(Opcodes.ALOAD, cx.throwable());
+        pushIndex(mv, cx.n());
+        mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "noteError",
+                "([Ljava/lang/Object;ILio/github/chutian0610/jolt/bind/JsonBindException;"
+                        + "I)[Ljava/lang/Object;", false);
+        mv.visitVarInsn(Opcodes.ASTORE, cx.errors());
+
+        mv.visitLabel(join);
+        cx.slots().emit(mv);
+        if (cx.referenceForm()) {
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop", "()V", false);
+        } else {
+            mv.visitVarInsn(Opcodes.ALOAD, cx.carrier());
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop",
+                    "(Ljava/lang/Object;)V", false);
+        }
+        mv.visitJumpInsn(Opcodes.GOTO, loopHead);
+    }
+
+    /**
+     * The root form's drain gate: the tail drains exactly when the root was an object (the
+     * loop-exit token in the token slot is END_OBJECT only on that path — a non-object root
+     * leaves its own token there and returns without draining, the reflective arm's shape);
+     * parser syntax errors in the tail surface unchanged.
+     */
+    static void emitDrain(MethodVisitor mv, LoopContext cx) {
+        Label drainHead = new Label();
+        Label drained = new Label();
+        mv.visitVarInsn(Opcodes.ALOAD, cx.token());
+        mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "END_OBJECT", TOKEN_DESC);
+        mv.visitJumpInsn(Opcodes.IF_ACMPEQ, drainHead);
+        mv.visitVarInsn(Opcodes.ALOAD, cx.result());
+        mv.visitInsn(Opcodes.ARETURN);
+
+        mv.visitLabel(drainHead);
+        cx.slots().emit(mv);
+        mv.visitVarInsn(Opcodes.ALOAD, 1);
+        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
+                PARSER_NEXT_TOKEN_DESC, true);
+        mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "EOF", TOKEN_DESC);
+        mv.visitJumpInsn(Opcodes.IF_ACMPEQ, drained);
+        mv.visitJumpInsn(Opcodes.GOTO, drainHead);
+
+        mv.visitLabel(drained);
+        cx.slots().emit(mv);
+        mv.visitVarInsn(Opcodes.ALOAD, cx.result());
+        mv.visitInsn(Opcodes.ARETURN);
     }
 }

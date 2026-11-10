@@ -688,8 +688,6 @@ final class PojoSpecializer {
 
             Label loopHead = new Label();
             Label sweep = new Label();
-            Label drainHead = new Label();
-            Label drained = new Label();
 
             // entry: the root form resets the shared path; both read the root token and
             // construct the default instance (the POJO construction is unconditional —
@@ -768,48 +766,22 @@ final class PojoSpecializer {
             mv.visitVarInsn(Opcodes.ALOAD, INSTANCE);
             mv.visitInsn(Opcodes.ARETURN);
 
-            // the field loop
-            mv.visitLabel(loopHead);
-            slots.emit(mv);
-            mv.visitVarInsn(Opcodes.ALOAD, 1);
-            mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
-                    PARSER_NEXT_TOKEN_DESC, true);
-            mv.visitVarInsn(Opcodes.ASTORE, TOKEN);
-            mv.visitVarInsn(Opcodes.ALOAD, TOKEN);
-            mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "END_OBJECT", TOKEN_DESC);
-            mv.visitJumpInsn(Opcodes.IF_ACMPEQ, sweep);
+            DirectBodies.LoopContext loop = new DirectBodies.LoopContext(slots, self,
+                    VALUE_TOKEN, TEXT, carrierSlot(), scratchSlot(), n, TOKEN, THROWABLE,
+                    ERRORS, UNKNOWN, -1, carrierSlot(), componentDepthSlot(), INSTANCE,
+                    referenceForm, j -> PojoSupport.setterKey(plan.setters.get(j)), inline);
+            DirectBodies.emitFieldLoop(mv, loop, loopHead, sweep,
+                    i -> {
+                        Class<?> raw = rawOf(componentType(plan, i));
+                        boolean childCapable = raw.isRecord()
+                                ? RecordSpecializer.isDirectCapable(raw)
+                                : isDirectCapable(raw);
+                        return new DirectBodies.Setter(plan.setters.get(i),
+                                PojoSupport.setterKey(plan.setters.get(i)),
+                                raw, pojoInternal, INSTANCE, SETTER_THROWABLE,
+                                new Object[]{pojoInternal}, childCapable);
+                    });
 
-            // the inline match chain against the baked setter keys
-            Label[] matched = new Label[n];
-            for (int i = 0; i < n; i++) {
-                matched[i] = new Label();
-                mv.visitVarInsn(Opcodes.ALOAD, 1);
-                if (referenceForm) {
-                    mv.visitLdcInsn(PojoSupport.setterKey(plan.setters.get(i)));
-                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
-                            PARSER_FIELD_NAME_EQUALS_DESC, true);
-                } else {
-                    mv.visitVarInsn(Opcodes.ALOAD, 0);
-                    mv.visitFieldInsn(Opcodes.GETFIELD, self, Emit.FIELD_NAME_FIELD_PREFIX + i,
-                            Emit.FIELD_NAME_DESC);
-                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
-                            Emit.PARSER_FIELD_NAME_EQUALS_KEY_DESC, true);
-                }
-                mv.visitJumpInsn(Opcodes.IFNE, matched[i]);
-            }
-            mv.visitVarInsn(Opcodes.ALOAD, 1);
-            mv.visitVarInsn(Opcodes.ALOAD, 2);
-            mv.visitVarInsn(Opcodes.ALOAD, UNKNOWN);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "skipOrNoteUnknown",
-                    "(Lio/github/chutian0610/jolt/JoltParser;"
-                            + "Lio/github/chutian0610/jolt/bind/BindConfig;"
-                            + "Ljava/lang/String;)Ljava/lang/String;", false);
-            mv.visitVarInsn(Opcodes.ASTORE, UNKNOWN);
-            mv.visitJumpInsn(Opcodes.GOTO, loopHead);
-
-            for (int i = 0; i < n; i++) {
-                emitComponent(mv, slots, i, matched[i], n, loopHead);
-            }
 
             // the shared declaration-order sweep, then the drain (root form only: the
             // loop-exit token is END_OBJECT only on the object-root path)
@@ -827,111 +799,10 @@ final class PojoSpecializer {
             } else {
                 // the root form's drain runs exactly when the root was an object (the
                 // loop-exit token); tail syntax errors surface unchanged
-                mv.visitVarInsn(Opcodes.ALOAD, TOKEN);
-                mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "END_OBJECT", TOKEN_DESC);
-                mv.visitJumpInsn(Opcodes.IF_ACMPEQ, drainHead);
-                mv.visitVarInsn(Opcodes.ALOAD, INSTANCE);
-                mv.visitInsn(Opcodes.ARETURN);
-
-                mv.visitLabel(drainHead);
-                slots.emit(mv);
-                mv.visitVarInsn(Opcodes.ALOAD, 1);
-                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
-                        PARSER_NEXT_TOKEN_DESC, true);
-                mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "EOF", TOKEN_DESC);
-                mv.visitJumpInsn(Opcodes.IF_ACMPEQ, drained);
-                mv.visitJumpInsn(Opcodes.GOTO, drainHead);
-
-                mv.visitLabel(drained);
-                slots.emit(mv);
-                mv.visitVarInsn(Opcodes.ALOAD, INSTANCE);
-                mv.visitInsn(Opcodes.ARETURN);
+                DirectBodies.emitDrain(mv, loop);
             }
 
             return new Size(10, INSTANCE + 1 + extraLocals());
-        }
-
-        /** One matched property: path push, the guarded value read + setter invoke, the
-         * shared slot note on failure, the path pop — then back to the field loop. */
-        private void emitComponent(MethodVisitor mv, Emit.FrameTracker slots, int i,
-                                   Label matched, int n, Label loopHead) {
-            mv.visitLabel(matched);
-            slots.emit(mv);
-
-            Label tryStart = new Label();
-            Label tryEnd = new Label();
-            Label join = new Label();
-            Label handler = new Label();
-            if (referenceForm) {
-                mv.visitLdcInsn(PojoSupport.setterKey(plan.setters.get(i)));
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
-                        "(Ljava/lang/String;)V", false);
-            } else {
-                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
-                mv.visitLdcInsn(PojoSupport.setterKey(plan.setters.get(i)));
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
-                        "(Ljava/lang/Object;Ljava/lang/String;)V", false);
-            }
-            if (inline[i] != null) {
-                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "carrierDepth",
-                        "(Ljava/lang/Object;)I", false);
-                mv.visitVarInsn(Opcodes.ISTORE, componentDepthSlot());
-            }
-            mv.visitVarInsn(Opcodes.ALOAD, 1);
-            mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
-                    PARSER_NEXT_TOKEN_DESC, true);
-            mv.visitVarInsn(Opcodes.ASTORE, VALUE_TOKEN);
-
-            mv.visitTryCatchBlock(tryStart, tryEnd, handler, BIND_EXCEPTION);
-            mv.visitLabel(tryStart);
-            // the receiver sits UNDER everything the read produces — pushed here, declared
-            // by every frame the shared read emits (the M5 stackPrefix discipline)
-            mv.visitVarInsn(Opcodes.ALOAD, INSTANCE);
-            Class<?> setterRaw = rawOf(componentType(plan, i));
-            boolean childCapable = setterRaw.isRecord()
-                    ? RecordSpecializer.isDirectCapable(setterRaw)
-                    : isDirectCapable(setterRaw);
-            DirectBodies.emitValue(mv, new DirectBodies.ReadContext(slots, self,
-                    VALUE_TOKEN, TEXT, carrierSlot(), scratchSlot()), i, inline[i],
-                    new DirectBodies.Setter(plan.setters.get(i), PojoSupport.setterKey(plan.setters.get(i)),
-                            setterRaw, pojoInternal, INSTANCE,
-                            SETTER_THROWABLE, tryEnd, new Object[]{pojoInternal}, childCapable));
-            mv.visitLabel(tryEnd);
-            slots.emit(mv);
-            mv.visitJumpInsn(Opcodes.GOTO, join);
-            mv.visitLabel(handler);
-            slots.emit(mv, BIND_EXCEPTION);
-            mv.visitVarInsn(Opcodes.ASTORE, THROWABLE);
-            if (inline[i] != null) {
-                // the failure may have left the cursor inside the inlined containers —
-                // drain exactly as many closers as segments the loops pushed, restore the
-                // carrier (the door's #61 recovery, one handler for any nesting)
-                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
-                mv.visitVarInsn(Opcodes.ILOAD, componentDepthSlot());
-                mv.visitVarInsn(Opcodes.ALOAD, 1);
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "recoverCollection",
-                        "(Ljava/lang/Object;ILio/github/chutian0610/jolt/JoltParser;)V", false);
-            }
-            mv.visitVarInsn(Opcodes.ALOAD, ERRORS);
-            pushIndex(mv, i);
-            mv.visitVarInsn(Opcodes.ALOAD, THROWABLE);
-            pushIndex(mv, n);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "noteError",
-                    "([Ljava/lang/Object;ILio/github/chutian0610/jolt/bind/JsonBindException;"
-                            + "I)[Ljava/lang/Object;", false);
-            mv.visitVarInsn(Opcodes.ASTORE, ERRORS);
-
-            mv.visitLabel(join);
-            slots.emit(mv);
-            if (referenceForm) {
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop", "()V", false);
-            } else {
-                mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop",
-                        "(Ljava/lang/Object;)V", false);
-            }
-            mv.visitJumpInsn(Opcodes.GOTO, loopHead);
         }
 
         private static void nullStore(MethodVisitor mv, int slot) {

@@ -446,7 +446,7 @@ final class InlineCollections {
             DirectBodies.emitValue(mv, new DirectBodies.ReadContext(body.slots(), body.self(),
                     body.valueToken(), body.text(), body.carrier(), body.scratchSlot()),
                     component, null,
-                    new DirectBodies.Element(stackBase, scalar.raw(), done));
+                    new DirectBodies.Element(stackBase, scalar.raw(), done), done, done);
             mv.visitLabel(done);
             body.slots().emit(mv, withStack(stackBase, "java/lang/Object"));
             return;
@@ -456,7 +456,7 @@ final class InlineCollections {
             DirectBodies.emitValue(mv, new DirectBodies.ReadContext(body.slots(), body.self(),
                     body.valueToken(), body.text(), body.carrier(), body.scratchSlot()),
                     component, null,
-                    new DirectBodies.Element(stackBase, enumeration.raw(), done));
+                    new DirectBodies.Element(stackBase, enumeration.raw(), done), done, done);
             mv.visitLabel(done);
             body.slots().emit(mv, withStack(stackBase, "java/lang/Object"));
             return;
