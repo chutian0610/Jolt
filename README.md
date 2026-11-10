@@ -197,6 +197,54 @@ $JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*M8Tracer.*" -prof gc
 $JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*GapDissection.*" -prof gc -wi 5 -i 5 -f 3
 ```
 
+**M9 trajectory (the scanner floor attack, gate-adjudicated at final HEAD across two
+independent runs, in-run A/B):** M9 opened with the scanner dissection (#63) whose honest
+headline reframed the target — the compact corpus's scanner cost is **per token (7.2–8.6
+ns/token), not per byte** (string spans 0.625 ns/byte, whitespace ~0.2–0.3 ns/byte and absent
+from compact fixtures; the dispatch family ≈ 55–60% of drain samples). The T0-ranked levers
+were then measured one by one, and the projections were refuted by the measurements — three
+times: the per-token shave delivered **+1.0–2.8%** on the pinned drains (adjacent-pair
+adjudicated; projected −6–9% — C2 had already CSE'd the redundant probe), the string-span
+SWAR was built, measured at **−8–17%** on the pinned corpus (projected −2–6%; the per-span
+word-evaluation tax dominates 2–6-byte spans) and retracted per win-to-ship, and the number
+and whitespace levers were no-ops by the dissection's own ledger. What landed in jolt-core:
+the merged fetch (one bounds check + one load per token, `skipWhitespace` folded away) and
+the cached container top — behavior byte-identical, 2,709 gates green with zero edits
+(#64).
+
+**The gate adjudication (#66, two independent runs at final HEAD, 3×5×1s, `-prof gc`):**
+the **outright-win pin — generated direct ≥ 1.0× Jackson afterburner in-run with error bands
+disjoint and ahead — is NOT MET, disclosed**: POJO generated direct **1.022× / 0.999×**
+afterburner (3.903M vs 3.819M; 3.858M vs 3.862M — parity-to-ahead point estimates, bands
+overlapping in both runs). The pin's evidence (the −25–40 ns lever projection ≈ 1.08–1.10×)
+was falsified by T1's measurements; the one-time recalibration clause was left unused on
+purpose — re-pinning after seeing the gate numbers would discard the disjointness noise
+guard, so the miss is disclosed with its attribution instead. The **zero-allocation arm is
+MET**: tokenDrain ≈ 0 B/op (0.001–0.021 across every drain) and generated direct
+**392.004 / 1352.015 B/op** — byte-identical across both runs and to the baseline code run
+the same hour (#64's instrument check; the +0.003/+0.015 last digits vs M8-day's .001 are
+machine state, not allocation). The **simd ship rule is NOT MET** — adjudicated in #65,
+the module is parked (see the jolt-simd section below). Jackson multiples, disclosure only:
+POJO **parity-to-ahead in point estimates** (the contested ceiling is now met at parity in
+both runs' centers), whole-graph **1.06× / 1.08× databind** (the M8 flip holds and widens)
+and **1.67× / 1.73× the M8-off reference arm**. Cross-run tokenDrain multiples vs
+v0.8.0-m8 (8.74M) read 0.96–0.99× — inside the machine's ±10%/2-hour drift; the levers' real
+effect lives in the adjacent-pair ratios, not cross-run multiples. Method note inherited
+from this milestone: the machine drifts up to ±10% within two hours, so every cross-config
+claim in M9 was adjudicated with **adjacent-pair alternation** (baseline/config runs
+interleaved, ratio per adjacent pair, median) wherever no in-run A/B arm exists; the scanner
+has no dual form — stated honestly, the Utf16 engine stays scalar by design.
+
+Reproduction:
+
+```bash
+export JAVA_HOME=/path/to/jdk-21
+./gradlew :jolt-bench:jmhJar
+$JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*M8Tracer.*" -prof gc -wi 5 -i 5 -f 3
+$JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*ScannerDissection.*" -prof gc -wi 5 -i 5 -f 3
+$JAVA_HOME/bin/java -jar jolt-bench/build/libs/*-jmh.jar ".*SimdDissection.*" -prof gc -wi 5 -i 5 -f 3
+```
+
 ### Generated binders (jolt-gen, M4 + M5 + M7 + M8)
 
 An optional module that runtime-generates a dedicated binder class per target type via
