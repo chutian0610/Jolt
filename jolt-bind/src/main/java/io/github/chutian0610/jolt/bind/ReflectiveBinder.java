@@ -90,7 +90,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
         Object[] args = new Object[components.length];
         for (int i = 0; i < components.length; i++) {
             String name = components[i].getName();
-            args[i] = Bind.toValue(node.get(name), componentTypes[i], path + "." + name, config);
+            args[i] = BindValues.toValue(node.get(name), componentTypes[i], path + "." + name, config);
         }
         if (config.failOnUnknown()) {
             for (String key : node.keys()) {
@@ -127,7 +127,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
             if (value == null) {
                 continue; // unknown fields are ignored; absent properties stay default
             }
-            Object bound = Bind.toValue(value, setter.getGenericParameterTypes()[0],
+            Object bound = BindValues.toValue(value, setter.getGenericParameterTypes()[0],
                     path + "." + key, config);
             try {
                 setter.invoke(instance, bound);
@@ -172,7 +172,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
                 try {
                     Object fieldValue = component.getAccessor().invoke(value);
                     writer.fieldName(component.getName());
-                    Bind.writeTo(fieldValue, writer, path + "." + component.getName());
+                    BindWrites.writeTo(fieldValue, writer, path + "." + component.getName());
                 } catch (ReflectiveOperationException e) {
                     throw new JsonBindException("cannot read component " + component.getName(), path);
                 }
@@ -184,7 +184,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
             try {
                 Object fieldValue = accessor.invoke(value);
                 writer.fieldName(property);
-                Bind.writeTo(fieldValue, writer, path + "." + property);
+                BindWrites.writeTo(fieldValue, writer, path + "." + property);
             } catch (ReflectiveOperationException e) {
                 throw new JsonBindException("cannot read property " + property, path);
             }
