@@ -1,5 +1,6 @@
 package io.github.chutian0610.jolt.gen;
 
+import io.github.chutian0610.jolt.bind.PojoSupport;
 import java.lang.reflect.Method;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
@@ -86,12 +87,8 @@ public final class GenPlan<T> {
     static String[] setterNames(Class<?> type) {
         List<String> out = new java.util.ArrayList<>();
         for (Method method : type.getMethods()) {
-            if (method.getName().startsWith("set")
-                    && method.getReturnType() == void.class
-                    && method.getParameterCount() == 1
-                    && java.lang.reflect.Modifier.isPublic(method.getModifiers())) {
-                String key = method.getName().substring(3);
-                out.add(Character.toLowerCase(key.charAt(0)) + key.substring(1));
+            if (PojoSupport.isSetter(method)) {
+                out.add(PojoSupport.setterKey(method));
             }
         }
         return out.toArray(new String[0]);
@@ -121,10 +118,7 @@ public final class GenPlan<T> {
     private static List<Method> setterMethods(Class<?> type) {
         List<Method> out = new java.util.ArrayList<>();
         for (Method method : type.getMethods()) {
-            if (method.getName().startsWith("set")
-                    && method.getReturnType() == void.class
-                    && method.getParameterCount() == 1
-                    && java.lang.reflect.Modifier.isPublic(method.getModifiers())) {
+            if (PojoSupport.isSetter(method)) {
                 out.add(method);
             }
         }

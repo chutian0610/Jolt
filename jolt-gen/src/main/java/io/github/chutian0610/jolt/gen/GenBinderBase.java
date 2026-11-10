@@ -10,6 +10,7 @@ import io.github.chutian0610.jolt.bind.TypedBinder;
 import io.github.chutian0610.jolt.tree.Node;
 
 import java.lang.reflect.InvocationTargetException;
+import io.github.chutian0610.jolt.bind.PojoSupport;
 import java.lang.reflect.Method;
 import java.util.List;
 
@@ -65,7 +66,7 @@ public class GenBinderBase implements TypedBinder<Object>, GeneratedFields {
     public void writeFields(Object value, JoltWriter writer, String path) {
         for (int i = 0; i < plan.accessors.length; i++) {
             String name = plan.isRecord ? plan.names[i]
-                    : propertyName(plan.accessors[i].getName());
+                    : PojoSupport.propertyName(plan.accessors[i].getName());
             Object fieldValue;
             try {
                 fieldValue = plan.accessors[i].invoke(value);
@@ -112,8 +113,7 @@ public class GenBinderBase implements TypedBinder<Object>, GeneratedFields {
             throw new JsonBindException("cannot instantiate " + plan.type.getName(), path);
         }
         for (Method setter : plan.setters) {
-            String mn = setter.getName();
-            String key = Character.toLowerCase(mn.charAt(3)) + mn.substring(4);
+            String key = PojoSupport.setterKey(setter);
             Node value = node.get(key);
             if (value == null) {
                 continue;
@@ -140,12 +140,4 @@ public class GenBinderBase implements TypedBinder<Object>, GeneratedFields {
     }
 
 
-    private static String propertyName(String accessorName) {
-        int prefix = accessorName.startsWith("is") ? 2 : 3;
-        if (accessorName.length() <= prefix) {
-            return accessorName; // record accessors named exactly like components
-        }
-        return Character.toLowerCase(accessorName.charAt(prefix))
-                + accessorName.substring(prefix + 1);
-    }
 }

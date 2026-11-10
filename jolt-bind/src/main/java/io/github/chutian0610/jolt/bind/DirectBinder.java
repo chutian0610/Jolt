@@ -201,9 +201,8 @@ final class DirectBinder<T> implements TypedBinder<T> {
     private static String[] setterKeys(Class<?> type) {
         List<String> out = new ArrayList<>();
         for (Method method : type.getMethods()) {
-            if (isSetter(method)) {
-                String key = method.getName().substring(3);
-                out.add(Character.toLowerCase(key.charAt(0)) + key.substring(1));
+            if (PojoSupport.isSetter(method)) {
+                out.add(PojoSupport.setterKey(method));
             }
         }
         out.sort(java.util.Comparator.naturalOrder());
@@ -213,19 +212,12 @@ final class DirectBinder<T> implements TypedBinder<T> {
     private static Method[] sortedSetters(Class<?> type) {
         List<Method> out = new ArrayList<>();
         for (Method method : type.getMethods()) {
-            if (isSetter(method)) {
+            if (PojoSupport.isSetter(method)) {
                 out.add(method);
             }
         }
         out.sort(java.util.Comparator.comparing(Method::getName));
         return out.toArray(new Method[0]);
-    }
-
-    private static boolean isSetter(Method method) {
-        return method.getName().startsWith("set")
-                && method.getReturnType() == void.class
-                && method.getParameterCount() == 1
-                && java.lang.reflect.Modifier.isPublic(method.getModifiers());
     }
 
     @SuppressWarnings("unchecked")

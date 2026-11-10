@@ -438,16 +438,35 @@ final class InlineCollections {
      */
     private static void emitElement(MethodVisitor mv, Body body, Shape shape, int component,
                                     int depth, Object[] stackBase) {
+        // the scalar and enum element reads go through the shared emitter (the null gate
+        // inside it lands at the same program point the old shared gate did); the child
+        // and nested-loop shapes keep their own gate + loop scaffolds
+        if (shape instanceof Scalar scalar) {
+            Label done = new Label();
+            DirectBodies.emitValue(mv, new DirectBodies.ReadContext(body.slots(), body.self(),
+                    body.valueToken(), body.text(), body.carrier(), body.scratchSlot()),
+                    component, null,
+                    new DirectBodies.Element(stackBase, scalar.raw(), done));
+            mv.visitLabel(done);
+            body.slots().emit(mv, withStack(stackBase, "java/lang/Object"));
+            return;
+        }
+        if (shape instanceof Enumeration enumeration) {
+            Label done = new Label();
+            DirectBodies.emitValue(mv, new DirectBodies.ReadContext(body.slots(), body.self(),
+                    body.valueToken(), body.text(), body.carrier(), body.scratchSlot()),
+                    component, null,
+                    new DirectBodies.Element(stackBase, enumeration.raw(), done));
+            mv.visitLabel(done);
+            body.slots().emit(mv, withStack(stackBase, "java/lang/Object"));
+            return;
+        }
         Label nullEdge = new Label();
         Label done = new Label();
         mv.visitVarInsn(Opcodes.ALOAD, body.valueToken());
         mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "VALUE_NULL", TOKEN_DESC);
         mv.visitJumpInsn(Opcodes.IF_ACMPEQ, nullEdge);
-        if (shape instanceof Scalar scalar) {
-            emitScalar(mv, body, scalar.raw(), stackBase);
-        } else if (shape instanceof Enumeration enumeration) {
-            emitEnum(mv, body, enumeration.raw(), stackBase);
-        } else if (shape instanceof Child child) {
+        if (shape instanceof Child child) {
             emitChild(mv, body, child.raw(), component, stackBase);
         } else {
             emitLoop(mv, body, shape, component, depth, stackBase);
@@ -490,189 +509,6 @@ final class InlineCollections {
         mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "requireNumber",
                 "(Lio/github/chutian0610/jolt/JoltParser;"
                         + "Lio/github/chutian0610/jolt/Token;)V", false);
-    }
-
-    /** The boxed scalar read (list/map/buffer elements are always references). */
-    private static void emitScalar(MethodVisitor mv, Body body, Class<?> raw,
-                                   Object[] stackBase) {
-        switch (raw.getName()) {
-            case "java.lang.String" -> {
-                requireToken(mv, body, "VALUE_STRING", "a string", stackBase);
-                mv.visitVarInsn(Opcodes.ALOAD, 1);
-                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "textValue",
-                        PARSER_TEXT_VALUE_DESC, true);
-            }
-            case "java.lang.Boolean", "boolean" -> {
-                Label trueEdge = new Label();
-                Label falseEdge = new Label();
-                Label ready = new Label();
-                mv.visitVarInsn(Opcodes.ALOAD, body.valueToken());
-                mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "VALUE_TRUE", TOKEN_DESC);
-                mv.visitJumpInsn(Opcodes.IF_ACMPEQ, trueEdge);
-                mv.visitVarInsn(Opcodes.ALOAD, body.valueToken());
-                mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "VALUE_FALSE", TOKEN_DESC);
-                mv.visitJumpInsn(Opcodes.IF_ACMPEQ, falseEdge);
-                raiseTagError(mv, body, "a boolean");
-                mv.visitLabel(trueEdge);
-                body.slots().emit(mv, stackBase);
-                mv.visitFieldInsn(Opcodes.GETSTATIC, "java/lang/Boolean", "TRUE",
-                        "Ljava/lang/Boolean;");
-                mv.visitJumpInsn(Opcodes.GOTO, ready);
-                mv.visitLabel(falseEdge);
-                body.slots().emit(mv, stackBase);
-                mv.visitFieldInsn(Opcodes.GETSTATIC, "java/lang/Boolean", "FALSE",
-                        "Ljava/lang/Boolean;");
-                mv.visitLabel(ready);
-                body.slots().emit(mv, withStack(stackBase, "java/lang/Boolean"));
-            }
-            case "java.math.BigDecimal" -> {
-                requireNumber(mv, body);
-                mv.visitVarInsn(Opcodes.ALOAD, 1);
-                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "bigDecimalValue",
-                        PARSER_BIG_DECIMAL_DESC, true);
-            }
-            case "java.math.BigInteger" -> {
-                requireNumber(mv, body);
-                mv.visitVarInsn(Opcodes.ALOAD, 1);
-                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "bigDecimalValue",
-                        PARSER_BIG_DECIMAL_DESC, true);
-                Label tryStart = new Label();
-                Label exact = new Label();
-                Label lossy = new Label();
-                Label done = new Label();
-                mv.visitTryCatchBlock(tryStart, exact, lossy, "java/lang/ArithmeticException");
-                mv.visitLabel(tryStart);
-                mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/math/BigDecimal",
-                        "toBigIntegerExact", "()Ljava/math/BigInteger;", false);
-                mv.visitLabel(exact);
-                mv.visitJumpInsn(Opcodes.GOTO, done);
-                mv.visitLabel(lossy);
-                body.slots().emit(mv, "java/lang/ArithmeticException");
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "notWholeNumber",
-                        "()Ljava/lang/RuntimeException;", false);
-                mv.visitInsn(Opcodes.ATHROW);
-                mv.visitLabel(done);
-                body.slots().emit(mv, withStack(stackBase, "java/math/BigInteger"));
-            }
-            case "java.lang.Float", "float" -> {
-                requireNumber(mv, body);
-                mv.visitVarInsn(Opcodes.ALOAD, 1);
-                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "bigDecimalValue",
-                        PARSER_BIG_DECIMAL_DESC, true);
-                mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/math/BigDecimal",
-                        "floatValue", "()F", false);
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Float", "valueOf",
-                        "(F)Ljava/lang/Float;", false);
-            }
-            case "java.lang.Double", "double" -> {
-                requireNumber(mv, body);
-                mv.visitVarInsn(Opcodes.ALOAD, 1);
-                mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "bigDecimalValue",
-                        PARSER_BIG_DECIMAL_DESC, true);
-                mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/math/BigDecimal",
-                        "doubleValue", "()D", false);
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Double", "valueOf",
-                        "(D)Ljava/lang/Double;", false);
-            }
-            default -> emitIntegral(mv, body, raw, stackBase);
-        }
-    }
-
-    /** The integral read: the shared checked long read, then the all-stack bound dance
-     * (each throw edge declares its own depth), boxed for the container. */
-    private static void emitIntegral(MethodVisitor mv, Body body, Class<?> raw,
-                                     Object[] stackBase) {
-        mv.visitVarInsn(Opcodes.ALOAD, 1);
-        mv.visitVarInsn(Opcodes.ALOAD, body.valueToken());
-        mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "readLongChecked",
-                "(Lio/github/chutian0610/jolt/JoltParser;"
-                        + "Lio/github/chutian0610/jolt/Token;)J", false);
-        long bound = switch (raw.getName()) {
-            case "byte", "java.lang.Byte" -> Byte.MAX_VALUE;
-            case "short", "java.lang.Short" -> Short.MAX_VALUE;
-            case "int", "java.lang.Integer" -> Integer.MAX_VALUE;
-            default -> Long.MAX_VALUE;
-        };
-        if (bound != Long.MAX_VALUE) {
-            Label overFirst = new Label();
-            Label overSecond = new Label();
-            Label inRange = new Label();
-            mv.visitInsn(Opcodes.DUP2);
-            mv.visitInsn(Opcodes.DUP2);
-            mv.visitLdcInsn(bound);
-            mv.visitInsn(Opcodes.LCMP);
-            mv.visitJumpInsn(Opcodes.IFGT, overFirst);
-            mv.visitLdcInsn(-bound - 1);
-            mv.visitInsn(Opcodes.LCMP);
-            mv.visitJumpInsn(Opcodes.IFLT, overSecond);
-            mv.visitJumpInsn(Opcodes.GOTO, inRange);
-            mv.visitLabel(overFirst);
-            body.slots().emit(mv, withStack(stackBase, Opcodes.LONG, Opcodes.LONG));
-            mv.visitLdcInsn(raw.getSimpleName());
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "boundError",
-                    "(Ljava/lang/String;)Ljava/lang/RuntimeException;", false);
-            mv.visitInsn(Opcodes.ATHROW);
-            mv.visitLabel(overSecond);
-            body.slots().emit(mv, withStack(stackBase, Opcodes.LONG));
-            mv.visitLdcInsn(raw.getSimpleName());
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "boundError",
-                    "(Ljava/lang/String;)Ljava/lang/RuntimeException;", false);
-            mv.visitInsn(Opcodes.ATHROW);
-            mv.visitLabel(inRange);
-            body.slots().emit(mv, withStack(stackBase, Opcodes.LONG));
-            mv.visitInsn(Opcodes.L2I);
-        }
-        switch (raw.getName()) {
-            case "byte", "java.lang.Byte" -> {
-                mv.visitInsn(Opcodes.I2B);
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Byte", "valueOf",
-                        "(B)Ljava/lang/Byte;", false);
-            }
-            case "short", "java.lang.Short" -> {
-                mv.visitInsn(Opcodes.I2S);
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Short", "valueOf",
-                        "(S)Ljava/lang/Short;", false);
-            }
-            case "int", "java.lang.Integer" -> mv.visitMethodInsn(Opcodes.INVOKESTATIC,
-                    "java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;", false);
-            default -> mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Long", "valueOf",
-                    "(J)Ljava/lang/Long;", false);
-        }
-    }
-
-    /** The enum element: the text into the shared TEXT slot, then Enum.valueOf with the
-     * unknown-name handler raising the shared message. */
-    private static void emitEnum(MethodVisitor mv, Body body, Class<?> raw,
-                                 Object[] stackBase) {
-        requireToken(mv, body, "VALUE_STRING", "a string", stackBase);
-        mv.visitVarInsn(Opcodes.ALOAD, 1);
-        mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "textValue",
-                PARSER_TEXT_VALUE_DESC, true);
-        mv.visitVarInsn(Opcodes.ASTORE, body.text());
-        Label tryStart = new Label();
-        Label exact = new Label();
-        Label lossy = new Label();
-        Label done = new Label();
-        mv.visitTryCatchBlock(tryStart, exact, lossy, "java/lang/IllegalArgumentException");
-        mv.visitLabel(tryStart);
-        mv.visitLdcInsn(Type.getType(raw));
-        mv.visitVarInsn(Opcodes.ALOAD, body.text());
-        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Enum", "valueOf",
-                "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;", false);
-        mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
-        mv.visitLabel(exact);
-        mv.visitJumpInsn(Opcodes.GOTO, done);
-        mv.visitLabel(lossy);
-        // the handler's entry stack is CLEARED — no receiver base here
-        body.slots().emit(mv, "java/lang/IllegalArgumentException");
-        mv.visitInsn(Opcodes.POP);
-        mv.visitVarInsn(Opcodes.ALOAD, body.text());
-        mv.visitLdcInsn(raw.getSimpleName());
-        mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "unknownEnumName",
-                "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/RuntimeException;", false);
-        mv.visitInsn(Opcodes.ATHROW);
-        mv.visitLabel(done);
-        body.slots().emit(mv, withStack(stackBase, internal(raw)));
     }
 
     /** The record/POJO element: the child's body on the SAME parser stream, through the

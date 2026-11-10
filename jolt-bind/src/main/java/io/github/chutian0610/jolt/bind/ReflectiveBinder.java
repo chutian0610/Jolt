@@ -122,7 +122,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
             throw new JsonBindException("cannot instantiate " + type.getName(), path);
         }
         for (Method setter : setters) {
-            String key = propertyName(setter.getName(), 3);
+            String key = PojoSupport.setterKey(setter);
             Node value = node.get(key);
             if (value == null) {
                 continue; // unknown fields are ignored; absent properties stay default
@@ -180,7 +180,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
             return;
         }
         for (Method accessor : accessors) {
-            String property = propertyName(accessor.getName(), accessor.getName().startsWith("is") ? 2 : 3);
+            String property = PojoSupport.propertyName(accessor.getName());
             try {
                 Object fieldValue = accessor.invoke(value);
                 writer.fieldName(property);
@@ -226,10 +226,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
     private static List<Method> setterTable(Class<?> type) {
         List<Method> out = new ArrayList<>();
         for (Method method : type.getMethods()) {
-            if (method.getName().startsWith("set")
-                    && method.getReturnType() == void.class
-                    && method.getParameterCount() == 1
-                    && java.lang.reflect.Modifier.isPublic(method.getModifiers())) {
+            if (PojoSupport.isSetter(method)) {
                 out.add(method);
             }
         }
@@ -255,11 +252,6 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
         }
         out.sort(Comparator.comparing(Method::getName));
         return out;
-    }
-
-    private static String propertyName(String accessorName, int prefixLength) {
-        return Character.toLowerCase(accessorName.charAt(prefixLength))
-                + accessorName.substring(prefixLength + 1);
     }
 
     /** Fallback lookup used by fail-on-unknown diagnostics on the POJO side. */

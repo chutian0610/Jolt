@@ -14,6 +14,7 @@ import net.bytebuddy.jar.asm.MethodVisitor;
 import net.bytebuddy.jar.asm.Opcodes;
 import net.bytebuddy.jar.asm.Type;
 
+import io.github.chutian0610.jolt.bind.PojoSupport;
 import java.lang.reflect.Method;
 
 import static io.github.chutian0610.jolt.gen.Emit.BIND_EXCEPTION;
@@ -101,9 +102,7 @@ final class PojoSpecializer {
      */
     static boolean componentsEmittable(Class<?> type) {
         for (Method setter : type.getMethods()) {
-            if (setter.getName().startsWith("set") && setter.getReturnType() == void.class
-                    && setter.getParameterCount() == 1
-                    && java.lang.reflect.Modifier.isPublic(setter.getModifiers())
+            if (PojoSupport.isSetter(setter)
                     && !RecordSpecializer.kindEmittable(setter.getParameterTypes()[0])) {
                 return false;
             }
@@ -114,22 +113,6 @@ final class PojoSpecializer {
     /** The component type the i-th setter binds (the full generic form for Bind.toValue). */
     private static java.lang.reflect.Type componentType(GenPlan<?> plan, int i) {
         return plan.setters.get(i).getGenericParameterTypes()[0];
-    }
-
-    /** setX → x — the JSON key, derived once at generation time and baked as a constant. */
-    private static String setterKey(Method setter) {
-        String mn = setter.getName();
-        return Character.toLowerCase(mn.charAt(3)) + mn.substring(4);
-    }
-
-    /** getX/isX → x/boolean-flag property — derived once at generation time. */
-    static String propertyName(String accessorName) {
-        int prefix = accessorName.startsWith("is") ? 2 : 3;
-        if (accessorName.length() <= prefix) {
-            return accessorName;
-        }
-        return Character.toLowerCase(accessorName.charAt(prefix))
-                + accessorName.substring(prefix + 1);
     }
 
     /** The per-component inline shapes (null = the door), computed once per generated
@@ -235,7 +218,7 @@ final class PojoSpecializer {
                 for (int i = 0; i < plan.setters.size(); i++) {
                     field(binder, Emit.FIELD_NAME_FIELD_PREFIX + i).set(binder,
                             io.github.chutian0610.jolt.FieldName.of(
-                                    setterKey(plan.setters.get(i))));
+                                    PojoSupport.setterKey(plan.setters.get(i))));
                 }
             }
             for (int i = 0; i < plan.setters.size(); i++) {
@@ -336,7 +319,7 @@ final class PojoSpecializer {
 
         private void emitComponent(MethodVisitor mv, Emit.FrameTracker slots, int i) {
             Method setter = plan.setters.get(i);
-            String name = setterKey(setter);
+            String name = PojoSupport.setterKey(setter);
             // Node f = node.get(key)
             mv.visitVarInsn(Opcodes.ALOAD, 1);
             mv.visitLdcInsn(name);
@@ -488,7 +471,7 @@ final class PojoSpecializer {
                                     NODE_TYPE_DESC, false);
                             appendObject(mv);
                         }),
-                        () -> emitValuePath(mv, setterKey(setter)));
+                        () -> emitValuePath(mv, PojoSupport.setterKey(setter)));
                 mv.visitLabel(parse);
                 slots.emit(mv);
             }
@@ -498,20 +481,20 @@ final class PojoSpecializer {
                     TYPED_BINDER_FIELD_DESC);
             mv.visitVarInsn(Opcodes.ALOAD, 5);
             emitPath(mv, () -> mv.visitVarInsn(Opcodes.ALOAD, 2),
-                    () -> mv.visitLdcInsn(setterKey(setter)));
+                    () -> mv.visitLdcInsn(PojoSupport.setterKey(setter)));
             mv.visitVarInsn(Opcodes.ALOAD, 3);
             mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, "io/github/chutian0610/jolt/bind/TypedBinder",
                     "parse",
                     "(Lio/github/chutian0610/jolt/tree/Node;Ljava/lang/String;"
                             + "Lio/github/chutian0610/jolt/bind/BindConfig;)Ljava/lang/Object;",
                     true);
-            invokeSetterOnStackTop(mv, slots, setter, setterKey(setter), setterDesc);
+            invokeSetterOnStackTop(mv, slots, setter, PojoSupport.setterKey(setter), setterDesc);
             mv.visitJumpInsn(Opcodes.GOTO, end);
 
             mv.visitLabel(nullPath);
             slots.emitFrom(mv, gateShape);
             mv.visitInsn(Opcodes.ACONST_NULL);
-            invokeSetterOnStackTop(mv, slots, setter, setterKey(setter), setterDesc);
+            invokeSetterOnStackTop(mv, slots, setter, PojoSupport.setterKey(setter), setterDesc);
             mv.visitJumpInsn(Opcodes.GOTO, end);
 
             mv.visitLabel(end);
@@ -531,11 +514,11 @@ final class PojoSpecializer {
             mv.visitFieldInsn(Opcodes.GETFIELD, self, TYPE_FIELD_PREFIX + i,
                     "Ljava/lang/reflect/Type;");
             emitPath(mv, () -> mv.visitVarInsn(Opcodes.ALOAD, 2),
-                    () -> mv.visitLdcInsn(setterKey(setter)));
+                    () -> mv.visitLdcInsn(PojoSupport.setterKey(setter)));
             mv.visitVarInsn(Opcodes.ALOAD, 3);
             mv.visitMethodInsn(Opcodes.INVOKESTATIC, BIND_INTERNAL, "toValue", TO_VALUE_DESC,
                     false);
-            invokeSetterOnStackTop(mv, slots, setter, setterKey(setter), setterDesc);
+            invokeSetterOnStackTop(mv, slots, setter, PojoSupport.setterKey(setter), setterDesc);
             mv.visitJumpInsn(Opcodes.GOTO, end);
 
             mv.visitLabel(end);
@@ -802,7 +785,7 @@ final class PojoSpecializer {
                 matched[i] = new Label();
                 mv.visitVarInsn(Opcodes.ALOAD, 1);
                 if (referenceForm) {
-                    mv.visitLdcInsn(setterKey(plan.setters.get(i)));
+                    mv.visitLdcInsn(PojoSupport.setterKey(plan.setters.get(i)));
                     mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "fieldNameEquals",
                             PARSER_FIELD_NAME_EQUALS_DESC, true);
                 } else {
@@ -880,12 +863,12 @@ final class PojoSpecializer {
             Label join = new Label();
             Label handler = new Label();
             if (referenceForm) {
-                mv.visitLdcInsn(setterKey(plan.setters.get(i)));
+                mv.visitLdcInsn(PojoSupport.setterKey(plan.setters.get(i)));
                 mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
                         "(Ljava/lang/String;)V", false);
             } else {
                 mv.visitVarInsn(Opcodes.ALOAD, carrierSlot());
-                mv.visitLdcInsn(setterKey(plan.setters.get(i)));
+                mv.visitLdcInsn(PojoSupport.setterKey(plan.setters.get(i)));
                 mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
                         "(Ljava/lang/Object;Ljava/lang/String;)V", false);
             }
@@ -902,7 +885,18 @@ final class PojoSpecializer {
 
             mv.visitTryCatchBlock(tryStart, tryEnd, handler, BIND_EXCEPTION);
             mv.visitLabel(tryStart);
-            emitValueIntoSetter(mv, slots, i, join, tryEnd);
+            // the receiver sits UNDER everything the read produces — pushed here, declared
+            // by every frame the shared read emits (the M5 stackPrefix discipline)
+            mv.visitVarInsn(Opcodes.ALOAD, INSTANCE);
+            Class<?> setterRaw = rawOf(componentType(plan, i));
+            boolean childCapable = setterRaw.isRecord()
+                    ? RecordSpecializer.isDirectCapable(setterRaw)
+                    : isDirectCapable(setterRaw);
+            DirectBodies.emitValue(mv, new DirectBodies.ReadContext(slots, self,
+                    VALUE_TOKEN, TEXT, carrierSlot(), scratchSlot()), i, inline[i],
+                    new DirectBodies.Setter(plan.setters.get(i), PojoSupport.setterKey(plan.setters.get(i)),
+                            setterRaw, pojoInternal, INSTANCE,
+                            SETTER_THROWABLE, tryEnd, new Object[]{pojoInternal}, childCapable));
             mv.visitLabel(tryEnd);
             slots.emit(mv);
             mv.visitJumpInsn(Opcodes.GOTO, join);
@@ -938,384 +932,6 @@ final class PojoSpecializer {
                         "(Ljava/lang/Object;)V", false);
             }
             mv.visitJumpInsn(Opcodes.GOTO, loopHead);
-        }
-
-        /** The receiver preloaded beneath the value, the JSON-null gate (primitive
-         * parameters raise the shared message, reference ones bind setter(null)), the
-         * kind-specific read producing the value on the stack, and the guarded invoke. */
-        private void emitValueIntoSetter(MethodVisitor mv, Emit.FrameTracker slots, int i,
-                                         Label join, Label tryEnd) {
-            Method setter = plan.setters.get(i);
-            String name = setterKey(setter);
-            Class<?> raw = rawOf(componentType(plan, i));
-            boolean primParam = setter.getParameterTypes()[0].isPrimitive();
-            // the receiver sits UNDER everything this read produces — every frame inside
-            // the read declares it as the stack base (the M5 stackPrefix discipline)
-            Object[] stackBase = {pojoInternal};
-            Label nullEdge = new Label();
-            mv.visitVarInsn(Opcodes.ALOAD, INSTANCE);
-            mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
-            mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "VALUE_NULL", TOKEN_DESC);
-            mv.visitJumpInsn(Opcodes.IF_ACMPEQ, nullEdge);
-            switch (kindOf(raw)) {
-                case STRING -> {
-                    requireToken(mv, slots, "VALUE_STRING", "a string", stackBase);
-                    mv.visitVarInsn(Opcodes.ALOAD, 1);
-                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "textValue",
-                            PARSER_TEXT_VALUE_DESC, true);
-                }
-                case BOOLEAN -> {
-                    Label trueEdge = new Label();
-                    Label falseEdge = new Label();
-                    Label valueReady = new Label();
-                    mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
-                    mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "VALUE_TRUE",
-                            TOKEN_DESC);
-                    mv.visitJumpInsn(Opcodes.IF_ACMPEQ, trueEdge);
-                    mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
-                    mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "VALUE_FALSE",
-                            TOKEN_DESC);
-                    mv.visitJumpInsn(Opcodes.IF_ACMPEQ, falseEdge);
-                    raiseTagError(mv, "a boolean");
-                    mv.visitLabel(trueEdge);
-                    slots.emit(mv, stackBase);
-                    emitBoolean(mv, true, primParam);
-                    mv.visitJumpInsn(Opcodes.GOTO, valueReady);
-                    mv.visitLabel(falseEdge);
-                    slots.emit(mv, stackBase);
-                    emitBoolean(mv, false, primParam);
-                    mv.visitLabel(valueReady);
-                    // the join carries the receiver AND the value (the parameter's kind)
-                    slots.emit(mv, withStack(stackBase,
-                            primParam ? Opcodes.INTEGER : "java/lang/Boolean"));
-                }
-                case NUMBER -> emitNumberValue(mv, slots, raw, name, primParam, stackBase);
-                case ENUM -> emitEnumValue(mv, slots, raw, name, stackBase);
-                case CHILD -> emitChildValue(mv, slots, i, raw, stackBase);
-                case GENERIC -> emitGenericValue(mv, slots, i, raw, stackBase);
-                default -> throw new IllegalStateException(
-                        "setter parameter " + name + " is not a direct-read shape");
-            }
-            invokeSetter(mv, slots, setter, name);
-            mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
-
-            mv.visitLabel(nullEdge);
-            slots.emit(mv, stackBase);
-            if (primParam) {
-                mv.visitLdcInsn(raw.getSimpleName());
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "nullForPrimitive",
-                        "(Ljava/lang/String;)Ljava/lang/RuntimeException;", false);
-                mv.visitInsn(Opcodes.ATHROW);
-                return;
-            }
-            mv.visitInsn(Opcodes.ACONST_NULL);
-            invokeSetter(mv, slots, setter, name);
-            // the null path joins the value path explicitly — falling straight into the
-            // caller's tryEnd would put the guarded invoke's done frame and the tryEnd
-            // frame on ONE offset (the M5-T2 zero-gap rule)
-            mv.visitJumpInsn(Opcodes.GOTO, tryEnd);
-        }
-
-        private void emitBoolean(MethodVisitor mv, boolean value, boolean primParam) {
-            if (primParam) {
-                mv.visitInsn(value ? Opcodes.ICONST_1 : Opcodes.ICONST_0);
-            } else {
-                mv.visitFieldInsn(Opcodes.GETSTATIC, "java/lang/Boolean",
-                        value ? "TRUE" : "FALSE", "Ljava/lang/Boolean;");
-            }
-        }
-
-        /** The tag gate: the token must carry the expected tag, else the shared rejection.
-         * The ok join carries the caller's stack base (the preloaded receiver). */
-        private void requireToken(MethodVisitor mv, Emit.FrameTracker slots, String constant,
-                                  String wanted, Object[] stackBase) {
-            Label ok = new Label();
-            mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
-            mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, constant, TOKEN_DESC);
-            mv.visitJumpInsn(Opcodes.IF_ACMPEQ, ok);
-            raiseTagError(mv, wanted);
-            mv.visitLabel(ok);
-            slots.emit(mv, stackBase);
-        }
-
-        /** parser/token/wanted onto the shared tagError, then the throw. */
-        private void raiseTagError(MethodVisitor mv, String wanted) {
-            mv.visitVarInsn(Opcodes.ALOAD, 1);
-            mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
-            mv.visitLdcInsn(wanted);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "tagError",
-                    "(Lio/github/chutian0610/jolt/JoltParser;"
-                            + "Lio/github/chutian0610/jolt/Token;"
-                            + "Ljava/lang/String;)Ljava/lang/RuntimeException;", false);
-            mv.visitInsn(Opcodes.ATHROW);
-        }
-
-        /** The guarded invoke: [receiver, value] already on the stack; the try region
-         * covers ONLY the INVOKEVIRTUAL — a throwing setter raises the shared rejection. */
-        private void invokeSetter(MethodVisitor mv, Emit.FrameTracker slots, Method setter,
-                                  String name) {
-            String setterDesc = "("
-                    + Type.getType(setter.getParameterTypes()[0]).getDescriptor() + ")V";
-            Label tryStart = new Label();
-            Label tryEnd = new Label();
-            Label handler = new Label();
-            Label done = new Label();
-            mv.visitTryCatchBlock(tryStart, tryEnd, handler, "java/lang/RuntimeException");
-            Object[] entryShape = slots.snapshot();
-            mv.visitLabel(tryStart);
-            mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, pojoInternal, setter.getName(),
-                    setterDesc, false);
-            mv.visitLabel(tryEnd);
-            mv.visitJumpInsn(Opcodes.GOTO, done);
-            mv.visitLabel(handler);
-            slots.emitFrom(mv, entryShape, "java/lang/RuntimeException");
-            mv.visitVarInsn(Opcodes.ASTORE, SETTER_THROWABLE);
-            mv.visitVarInsn(Opcodes.ALOAD, SETTER_THROWABLE);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "setterRejected",
-                    "(Ljava/lang/Throwable;)Lio/github/chutian0610/jolt/bind/JsonBindException;",
-                    false);
-            mv.visitInsn(Opcodes.ATHROW);
-            mv.visitLabel(done);
-            slots.emitFrom(mv, entryShape);
-        }
-
-        /** The enum read: the text into the shared TEXT slot, then Enum.valueOf with the
-         * unknown-name handler raising the shared message. The value stays on the stack. */
-        private void emitEnumValue(MethodVisitor mv, Emit.FrameTracker slots, Class<?> raw,
-                                   String name, Object[] stackBase) {
-            requireToken(mv, slots, "VALUE_STRING", "a string", stackBase);
-            mv.visitVarInsn(Opcodes.ALOAD, 1);
-            mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "textValue",
-                    PARSER_TEXT_VALUE_DESC, true);
-            mv.visitVarInsn(Opcodes.ASTORE, TEXT);
-            Label tryStart = new Label();
-            Label exact = new Label();
-            Label lossy = new Label();
-            Label done = new Label();
-            mv.visitTryCatchBlock(tryStart, exact, lossy, "java/lang/IllegalArgumentException");
-            mv.visitLabel(tryStart);
-            mv.visitLdcInsn(Type.getType(raw));
-            mv.visitVarInsn(Opcodes.ALOAD, TEXT);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Enum", "valueOf",
-                    "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;", false);
-            mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
-            mv.visitLabel(exact);
-            mv.visitJumpInsn(Opcodes.GOTO, done);
-            mv.visitLabel(lossy);
-            // the handler's entry stack is CLEARED — no receiver base here
-            slots.emit(mv, "java/lang/IllegalArgumentException");
-            mv.visitInsn(Opcodes.POP);
-            mv.visitVarInsn(Opcodes.ALOAD, TEXT);
-            mv.visitLdcInsn(raw.getSimpleName());
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "unknownEnumName",
-                    "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/RuntimeException;",
-                    false);
-            mv.visitInsn(Opcodes.ATHROW);
-            mv.visitLabel(done);
-            // the join carries the receiver AND the value
-            slots.emit(mv, withStack(stackBase, internal(raw)));
-        }
-
-        /** The nested record/POJO value: the child's body on the SAME parser stream — the
-         * generation-time dispatch (monomorphic body call, or the reflective door). */
-        private void emitChildValue(MethodVisitor mv, Emit.FrameTracker slots, int i,
-                                    Class<?> raw, Object[] stackBase) {
-            requireToken(mv, slots, "START_OBJECT", "an object", stackBase);
-            if (raw.isRecord() ? RecordSpecializer.isDirectCapable(raw)
-                    : isDirectCapable(raw)) {
-                mv.visitVarInsn(Opcodes.ALOAD, 0);
-                mv.visitFieldInsn(Opcodes.GETFIELD, self, CHILD_FIELD_PREFIX + i,
-                        TYPED_BINDER_FIELD_DESC);
-                mv.visitTypeInsn(Opcodes.CHECKCAST, GEN_BASE);
-                mv.visitVarInsn(Opcodes.ALOAD, 1);
-                mv.visitVarInsn(Opcodes.ALOAD, 2);
-                mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, GEN_BASE,
-                        RecordSpecializer.PARSE_TOKENS_BODY_METHOD,
-                        GEN_BASE_PARSE_TOKENS_BODY_DESC, false);
-            } else {
-                mv.visitVarInsn(Opcodes.ALOAD, 1);
-                mv.visitVarInsn(Opcodes.ALOAD, 2);
-                mv.visitLdcInsn(Type.getType(raw));
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "nestedBody",
-                        NESTED_BODY_DESC, false);
-            }
-            mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
-        }
-
-        /** Collections/maps/untyped: a decomposable shape emits its loop INLINE (the M8
-         * form — {@link InlineCollections}); everything else delegates to the shared
-         * Plan-driven read through the door — ONE call for the whole value; the element
-         * Type is the parent's baked field. */
-        private void emitGenericValue(MethodVisitor mv, Emit.FrameTracker slots, int i,
-                                      Class<?> raw, Object[] stackBase) {
-            if (inline[i] != null) {
-                InlineCollections.emit(mv,
-                        new InlineCollections.Body(self, VALUE_TOKEN, TEXT, carrierSlot(),
-                                scratchSlot(), slots),
-                        inline[i], i, stackBase);
-                mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
-                return;
-            }
-            mv.visitVarInsn(Opcodes.ALOAD, 1);
-            mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
-            mv.visitVarInsn(Opcodes.ALOAD, 0);
-            mv.visitFieldInsn(Opcodes.GETFIELD, self, TYPE_FIELD_PREFIX + i,
-                    "Ljava/lang/reflect/Type;");
-            mv.visitVarInsn(Opcodes.ALOAD, 2);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "readValue",
-                    "(Lio/github/chutian0610/jolt/JoltParser;"
-                            + "Lio/github/chutian0610/jolt/Token;"
-                            + "Ljava/lang/reflect/Type;"
-                            + "Lio/github/chutian0610/jolt/bind/BindConfig;"
-                            + ")Ljava/lang/Object;", false);
-            mv.visitTypeInsn(Opcodes.CHECKCAST, internal(raw));
-        }
-
-        /** The numeric family with the value LEFT ON THE STACK (the setter parameter's
-         * own kind — primitive stays unboxed). */
-        private void emitNumberValue(MethodVisitor mv, Emit.FrameTracker slots, Class<?> raw,
-                                     String name, boolean primParam, Object[] stackBase) {
-            switch (raw.getName()) {
-                case "float", "java.lang.Float" -> {
-                    requireNumber(mv);
-                    mv.visitVarInsn(Opcodes.ALOAD, 1);
-                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "bigDecimalValue",
-                            PARSER_BIG_DECIMAL_DESC, true);
-                    mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/math/BigDecimal",
-                            "floatValue", "()F", false);
-                    if (!primParam) {
-                        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Float", "valueOf",
-                                "(F)Ljava/lang/Float;", false);
-                    }
-                }
-                case "double", "java.lang.Double" -> {
-                    requireNumber(mv);
-                    mv.visitVarInsn(Opcodes.ALOAD, 1);
-                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "bigDecimalValue",
-                            PARSER_BIG_DECIMAL_DESC, true);
-                    mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/math/BigDecimal",
-                            "doubleValue", "()D", false);
-                    if (!primParam) {
-                        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Double", "valueOf",
-                                "(D)Ljava/lang/Double;", false);
-                    }
-                }
-                case "java.math.BigDecimal" -> {
-                    requireNumber(mv);
-                    mv.visitVarInsn(Opcodes.ALOAD, 1);
-                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "bigDecimalValue",
-                            PARSER_BIG_DECIMAL_DESC, true);
-                }
-                case "java.math.BigInteger" -> {
-                    requireNumber(mv);
-                    mv.visitVarInsn(Opcodes.ALOAD, 1);
-                    mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "bigDecimalValue",
-                            PARSER_BIG_DECIMAL_DESC, true);
-                    Label tryStart = new Label();
-                    Label exact = new Label();
-                    Label lossy = new Label();
-                    Label done = new Label();
-                    mv.visitTryCatchBlock(tryStart, exact, lossy,
-                            "java/lang/ArithmeticException");
-                    mv.visitLabel(tryStart);
-                    mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/math/BigDecimal",
-                            "toBigIntegerExact", "()Ljava/math/BigInteger;", false);
-                    mv.visitLabel(exact);
-                    mv.visitJumpInsn(Opcodes.GOTO, done);
-                    mv.visitLabel(lossy);
-                    // the handler's entry stack is CLEARED — no receiver base here
-                    slots.emit(mv, "java/lang/ArithmeticException");
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "notWholeNumber",
-                            "()Ljava/lang/RuntimeException;", false);
-                    mv.visitInsn(Opcodes.ATHROW);
-                    mv.visitLabel(done);
-                    // the join carries the receiver AND the value
-                    slots.emit(mv, withStack(stackBase, "java/math/BigInteger"));
-                }
-                default -> emitIntegralValue(mv, slots, raw, name, primParam, stackBase);
-            }
-        }
-
-        /** requireNumber(parser, token) through the shared helper. */
-        private void requireNumber(MethodVisitor mv) {
-            mv.visitVarInsn(Opcodes.ALOAD, 1);
-            mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "requireNumber",
-                    "(Lio/github/chutian0610/jolt/JoltParser;"
-                            + "Lio/github/chutian0610/jolt/Token;)V", false);
-        }
-
-        /** The integral read with the value left on the stack: the shared checked long
-         * read, then the all-stack bound dance (each throw edge declares its own depth). */
-        private void emitIntegralValue(MethodVisitor mv, Emit.FrameTracker slots, Class<?> raw,
-                                       String name, boolean primParam, Object[] stackBase) {
-            mv.visitVarInsn(Opcodes.ALOAD, 1);
-            mv.visitVarInsn(Opcodes.ALOAD, VALUE_TOKEN);
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "readLongChecked",
-                    "(Lio/github/chutian0610/jolt/JoltParser;"
-                            + "Lio/github/chutian0610/jolt/Token;)J", false);
-            long bound = switch (raw.getName()) {
-                case "byte", "java.lang.Byte" -> Byte.MAX_VALUE;
-                case "short", "java.lang.Short" -> Short.MAX_VALUE;
-                case "int", "java.lang.Integer" -> Integer.MAX_VALUE;
-                default -> Long.MAX_VALUE;
-            };
-            if (bound == Long.MAX_VALUE) {
-                if (!primParam) {
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Long", "valueOf",
-                            "(J)Ljava/lang/Long;", false);
-                }
-                return;
-            }
-            Label overFirst = new Label();
-            Label overSecond = new Label();
-            Label inRange = new Label();
-            mv.visitInsn(Opcodes.DUP2);
-            mv.visitInsn(Opcodes.DUP2);
-            mv.visitLdcInsn(bound);
-            mv.visitInsn(Opcodes.LCMP);
-            mv.visitJumpInsn(Opcodes.IFGT, overFirst);
-            mv.visitLdcInsn(-bound - 1);
-            mv.visitInsn(Opcodes.LCMP);
-            mv.visitJumpInsn(Opcodes.IFLT, overSecond);
-            mv.visitJumpInsn(Opcodes.GOTO, inRange);
-            mv.visitLabel(overFirst);
-            slots.emit(mv, withStack(stackBase, Opcodes.LONG, Opcodes.LONG));
-            mv.visitLdcInsn(raw.getSimpleName());
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "boundError",
-                    "(Ljava/lang/String;)Ljava/lang/RuntimeException;", false);
-            mv.visitInsn(Opcodes.ATHROW);
-            mv.visitLabel(overSecond);
-            slots.emit(mv, withStack(stackBase, Opcodes.LONG));
-            mv.visitLdcInsn(raw.getSimpleName());
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "boundError",
-                    "(Ljava/lang/String;)Ljava/lang/RuntimeException;", false);
-            mv.visitInsn(Opcodes.ATHROW);
-            mv.visitLabel(inRange);
-            slots.emit(mv, withStack(stackBase, Opcodes.LONG));
-            mv.visitInsn(Opcodes.L2I);
-            switch (raw.getName()) {
-                case "byte", "java.lang.Byte" -> {
-                    mv.visitInsn(Opcodes.I2B);
-                    if (!primParam) {
-                        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Byte", "valueOf",
-                                "(B)Ljava/lang/Byte;", false);
-                    }
-                }
-                case "short", "java.lang.Short" -> {
-                    mv.visitInsn(Opcodes.I2S);
-                    if (!primParam) {
-                        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Short", "valueOf",
-                                "(S)Ljava/lang/Short;", false);
-                    }
-                }
-                default -> {
-                    if (!primParam) {
-                        mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Integer",
-                                "valueOf", "(I)Ljava/lang/Integer;", false);
-                    }
-                }
-            }
         }
 
         private static void nullStore(MethodVisitor mv, int slot) {
@@ -1362,7 +978,7 @@ final class PojoSpecializer {
             }
             for (int i = 0; i < plan.accessors.length; i++) {
                 Method getter = plan.accessors[i];
-                String name = propertyName(getter.getName());
+                String name = PojoSupport.propertyName(getter.getName());
                 Label tryStart = new Label();
                 Label tryEnd = new Label();
                 Label handler = new Label();

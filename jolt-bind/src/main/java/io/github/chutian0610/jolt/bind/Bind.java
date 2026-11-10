@@ -1,6 +1,7 @@
 package io.github.chutian0610.jolt.bind;
 
 import io.github.chutian0610.jolt.Jolt;
+import io.github.chutian0610.jolt.JoltParser;
 import io.github.chutian0610.jolt.JoltWriter;
 import io.github.chutian0610.jolt.tree.Node;
 import io.github.chutian0610.jolt.tree.TypeTag;
@@ -65,20 +66,27 @@ public final class Bind {
      */
     @SuppressWarnings("unchecked")
     private static <T> T parseDirect(byte[] json, Class<T> type, BindConfig config) {
-        TypedBinder<?> generated = GENERATED.get(type);
-        if (generated instanceof GeneratedFields fields && fields.hasDirectRead()) {
-            return ((TypedBinder<T>) generated).parseTokens(DirectSupport.parserFor(json), config);
-        }
-        return DirectBinder.<T>forClass(type).parseDirect(json, config);
+        return parseDirect((Object) json, type, config);
     }
 
     @SuppressWarnings("unchecked")
     private static <T> T parseDirect(String json, Class<T> type, BindConfig config) {
+        return parseDirect((Object) json, type, config);
+    }
+
+    /** The twins' shared body — the registry consult, then each grade's own fallback. */
+    @SuppressWarnings("unchecked")
+    private static <T> T parseDirect(Object json, Class<T> type, BindConfig config) {
         TypedBinder<?> generated = GENERATED.get(type);
         if (generated instanceof GeneratedFields fields && fields.hasDirectRead()) {
-            return ((TypedBinder<T>) generated).parseTokens(DirectSupport.parserFor(json), config);
+            JoltParser parser = json instanceof byte[] bytes
+                    ? DirectSupport.parserFor(bytes)
+                    : DirectSupport.parserFor((String) json);
+            return ((TypedBinder<T>) generated).parseTokens(parser, config);
         }
-        return DirectBinder.<T>forClass(type).parseDirect(json, config);
+        return json instanceof byte[] bytes
+                ? DirectBinder.<T>forClass(type).parseDirect(bytes, config)
+                : DirectBinder.<T>forClass(type).parseDirect((String) json, config);
     }
 
     /** Serializes a bound value as compact JSON. */
@@ -396,14 +404,6 @@ public final class Bind {
 
 
 
-    /** Structural kinds dispatch through their cached binders; the rest are scalars. */
-    private static boolean isStructure(Object value) {
-        return value instanceof List<?> || value instanceof Map<?, ?> || value.getClass().isArray()
-                || value instanceof java.lang.Record || value instanceof Enum<?>
-                || !(value instanceof String || value instanceof Number
-                     || value instanceof Boolean);
-    }
-
     /**
      * The shared write emission for any value (scalars, collections, record/POJO via its
      * binder) — the contract every bind adapter writes through.
@@ -417,7 +417,10 @@ public final class Bind {
             emitNode(n, writer);
             return;
         }
-        if (isStructure(value)) {
+        // the scalar kinds write themselves; everything else routes through a binder
+        boolean scalar = value instanceof String || value instanceof Number
+                || value instanceof Boolean;
+        if (!scalar) {
             Class<?> raw = value.getClass();
             if (raw.isRecord() || (!raw.isArray() && !(value instanceof List<?>)
                     && !(value instanceof Map<?, ?>) && !(value instanceof Enum<?>))) {
