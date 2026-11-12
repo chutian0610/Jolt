@@ -1,5 +1,6 @@
 package io.github.chutian0610.jolt;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -81,15 +82,75 @@ class JoltParityTest {
         assertEquals(1.5, p.doubleValue());
     }
 
-    @ParameterizedTest(name = "{0}")
-    @MethodSource("engines")
-    void rejectionsMatch(String engine, BiFunction<String, Integer, JoltParser> parse) {
-        for (String bad : new String[]{
-                "{\"a\":1,}", "[1,]", "{\"a\" 1}", "{1:2}", "[1 2]", "123 456", "",
-                "{\"a\":}", "[1", "{\"a\":1", "01", "1.", "1e", "-", "+1", ".5",
-                "\"\\q\"", "\"\\u12\"", "tru", "\"unterminated", "{\"a\":1]\"", "[1}]"}) {
-            assertThrows(JsonParseException.class, () -> tokensOf(parse.apply(bad, 512)), bad);
+    /**
+     * The rejection corpus, ASCII only: byte offsets equal char offsets, so the FULL message
+     * (detail + offset + line + column) is comparable across the engines. The
+     * {@code \uD800}-escape forms exercise the materialization-time surrogate rejection both
+     * engines share. Excluded: the value-position family ("{"a" 1}", "{1:2}", "[1 2]") and
+     * the raw forms — one rejection, each engine's own unit word / own domain — pinned in
+     * the lexical-family test below.
+     */
+    private static final String[] ASCII_REJECTIONS = {
+            "{\"a\":1,}", "[1,]",
+            "{\"a\":}", "[1", "{\"a\":1", "1.", "1e", "-", "+1", ".5",
+            "\"\\q\"", "\"\\u12\"", "tru", "\"unterminated", "{\"a\":1]\"", "[1}]",
+            "\"\\uD800\"", "[\"\\uDFFF\"]"};
+
+    private static JsonParseException thrown(Runnable parse) {
+        try {
+            parse.run();
+        } catch (JsonParseException e) {
+            return e;
         }
+        return null;
+    }
+
+    /** Cross-engine message parity: same ASCII document, same full diagnostic — not just
+     * the same throw. The one home for the detail strings makes drift structurally hard;
+     * this matrix is the regression net. */
+    @Test
+    void rejectionMessagesMatchAcrossEngines() {
+        for (String bad : ASCII_REJECTIONS) {
+            JsonParseException utf8 = thrown(() -> drain(Jolt.parse(
+                    bad.getBytes(StandardCharsets.UTF_8), 512)));
+            JsonParseException utf16 = thrown(() -> drain(Jolt.parse(bad, 512)));
+            assertEquals(utf8 == null, utf16 == null, bad);
+            assertEquals(utf8 == null ? null : utf8.getMessage(),
+                    utf16 == null ? null : utf16.getMessage(), bad);
+        }
+    }
+
+    /**
+     * The two lexical families each reject their OWN domain's raw illegality, and the
+     * contract maps them: the UTF-8 engine's byte-level sequence rejection is the byte
+     * rendering of what the char engine catches as a raw surrogate — an input one engine can
+     * never even see (raw bytes are inexpressible as a String; a raw surrogate survives
+     * UTF-8 encoding as {@code ?}). The {@code value not allowed} family is the same in
+     * reverse: one rejection, two engines' own unit words (byte vs char). Their detail
+     * strings therefore never compare; each is pinned in its own domain here.
+     */
+    @Test
+    void lexicalFamiliesRejectTheirOwnDomain() {
+        // byte domain: an illegal leading byte — invisible to the String entrance
+        JsonParseException utf8 = thrown(() -> drain(Jolt.parse(
+                new byte[]{'"', (byte) 0xFF, '"'}, 512)));
+        assertTrue(utf8 != null && utf8.getMessage().startsWith("invalid UTF-8 leading byte"),
+                utf8 == null ? "no throw" : utf8.getMessage());
+        // char domain: a raw unpaired high surrogate inside a JSON string — invisible to the
+        // byte[] entrance (it survives getBytes as '?')
+        JsonParseException utf16 = thrown(() -> drain(Jolt.parse("\"\uD800x\"", 512)));
+        assertTrue(utf16 != null && utf16.getMessage().startsWith("unpaired surrogate in string"),
+                utf16 == null ? "no throw" : utf16.getMessage());
+        // the value-position family: same rejection, each engine's own unit word
+        JsonParseException vb = thrown(() -> drain(Jolt.parse("{\"a\" 1}".getBytes(StandardCharsets.UTF_8), 512)));
+        assertTrue(vb != null && vb.getMessage().startsWith("value not allowed here (byte '1'"),
+                vb == null ? "no throw" : vb.getMessage());
+        JsonParseException vc = thrown(() -> drain(Jolt.parse("{\"a\" 1}", 512)));
+        assertTrue(vc != null && vc.getMessage().startsWith("value not allowed here (char '1'"),
+                vc == null ? "no throw" : vc.getMessage());
+        JsonParseException vk = thrown(() -> drain(Jolt.parse("{1:2}", 512)));
+        assertTrue(vk != null && vk.getMessage().startsWith("value not allowed here (char '1'"),
+                vk == null ? "no throw" : vk.getMessage());
     }
 
     @ParameterizedTest(name = "{0}")

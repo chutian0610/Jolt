@@ -79,7 +79,7 @@ public final class Utf16Parser implements JoltParser {
 
     Utf16Parser(String json, int maxDepth, int features) {
         if (maxDepth < 1) {
-            throw new IllegalArgumentException("maxDepth must be >= 1, got " + maxDepth);
+            throw new IllegalArgumentException(ParseErrors.maxDepthMustBeAtLeastOne(maxDepth));
         }
         this.json = json.toCharArray();
         this.maxDepth = maxDepth;
@@ -177,14 +177,14 @@ public final class Utf16Parser implements JoltParser {
                 }
                 case ',' -> {
                     if (state != ST_AFTER) {
-                        return failToken("',' not allowed here");
+                        return failToken(ParseErrors.commaNotAllowedHere());
                     }
                     state = (top() == OBJECT) ? ST_OBJ_KEY : ST_VALUE;
                     continue;
                 }
                 case ':' -> {
                     if (state != ST_COLON) {
-                        return failToken("':' not allowed here");
+                        return failToken(ParseErrors.colonNotAllowedHere());
                     }
                     state = ST_VALUE;
                     continue;
@@ -204,7 +204,7 @@ public final class Utf16Parser implements JoltParser {
                         state = afterValue();
                         return Token.VALUE_STRING;
                     }
-                    return failToken("'\"' not allowed here");
+                    return failToken(ParseErrors.quoteNotAllowedHere());
                 }
                 case 't' -> {
                     if (!requireValuePosition(c) || !scanLiteral("true")) {
@@ -231,7 +231,7 @@ public final class Utf16Parser implements JoltParser {
                     // Only reachable as a comment opener; strict mode rejects here with the
                     // same branch it would otherwise never take.
                     if (!comments) {
-                        return failToken("Unexpected character");
+                        return failToken(ParseErrors.unexpectedCharacter());
                     }
                     if (!skipComment()) {
                         return null;
@@ -247,7 +247,7 @@ public final class Utf16Parser implements JoltParser {
                         return kind < 0 ? null
                                 : kind == 1 ? Token.VALUE_NUMBER_FLOAT : Token.VALUE_NUMBER_INT;
                     }
-                    return failToken("Unexpected character");
+                    return failToken(ParseErrors.unexpectedCharacter());
                 }
             }
         }
@@ -263,7 +263,7 @@ public final class Utf16Parser implements JoltParser {
         if (state == ST_TOP_DONE) {
             return Token.EOF;
         }
-        return failToken("Unexpected end of input");
+        return failToken(ParseErrors.unexpectedEndOfInput());
     }
 
     /** Drains to EOF for the tryParse facade; never throws. */
@@ -323,19 +323,19 @@ public final class Utf16Parser implements JoltParser {
                         if (p + 6 <= valueEnd && json[p] == '\\' && json[p + 1] == 'u') {
                             int low = hex4(p + 2);
                             if (low < 0xDC00 || low > 0xDFFF) {
-                                throw materializationError("unpaired surrogate escape in string");
+                                throw materializationError(ParseErrors.unpairedSurrogateEscape());
                             }
                             p += 6;
                             cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
                         } else {
-                            throw materializationError("unpaired surrogate escape in string");
+                            throw materializationError(ParseErrors.unpairedSurrogateEscape());
                         }
                     } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
-                        throw materializationError("lone low surrogate escape in string");
+                        throw materializationError(ParseErrors.loneLowSurrogateEscape());
                     }
                     out = encodeChar(cp, out);
                 }
-                default -> throw materializationError("invalid escape in string"); // scan validated
+                default -> throw materializationError(ParseErrors.invalidEscapeInString()); // scan validated
             }
         }
         return new String(scratch, 0, out);
@@ -387,7 +387,7 @@ public final class Utf16Parser implements JoltParser {
         while (p < end) {
             int digit = json[p] - '0';
             if (acc < (limit + digit) / 10) {
-                throw new ArithmeticException("long overflow in number at offset " + valueStart);
+                throw new ArithmeticException(ParseErrors.longOverflowAt(valueStart));
             }
             acc = acc * 10 - digit;
             p++;
@@ -582,7 +582,7 @@ public final class Utf16Parser implements JoltParser {
 
     private boolean requireValuePosition(char c) {
         return isValuePosition()
-                || fail("value not allowed here (char '" + c + "')");
+                || fail(ParseErrors.valueNotAllowedChar(c));
     }
 
     private int afterValue() {
@@ -606,12 +606,12 @@ public final class Utf16Parser implements JoltParser {
             pop();
             return endToken;
         }
-        return failToken(what + " not allowed here");
+        return failToken(ParseErrors.notAllowedHere(what));
     }
 
     private boolean push(char container) {
         if (depth == maxDepth) {
-            return fail("nesting depth exceeds limit " + maxDepth);
+            return fail(ParseErrors.nestingDepthExceedsLimit(maxDepth));
         }
         if (depth == containerStack.length) {
             containerStack = Arrays.copyOf(containerStack,
@@ -654,7 +654,7 @@ public final class Utf16Parser implements JoltParser {
                 continue;
             }
             if (c < 0x20) {
-                return fail("raw control character in string");
+                return fail(ParseErrors.rawControlCharacterInString());
             }
             if (c >= 0xD800) {
                 // Surrogate pairing is checked at scan time, mirroring the UTF-8 engine's
@@ -662,25 +662,25 @@ public final class Utf16Parser implements JoltParser {
                 if (c <= 0xDBFF) {
                     // c is the high surrogate at pos; the low surrogate must follow at pos+1.
                     if (pos + 1 >= json.length || json[pos + 1] < 0xDC00 || json[pos + 1] > 0xDFFF) {
-                        return fail("unpaired surrogate in string");
+                        return fail(ParseErrors.unpairedSurrogateInString());
                     }
                     pos += 2; // high + low
                     continue;
                 }
                 if (c <= 0xDFFF) {
-                    return fail("unpaired low surrogate in string");
+                    return fail(ParseErrors.unpairedLowSurrogateInString());
                 }
             }
             pos++;
         }
-        return fail("unterminated string");
+        return fail(ParseErrors.unterminatedString());
     }
 
     /** Validates an escape sequence; the cursor sits on the backslash. */
     private boolean validateEscape() {
         pos++; // past backslash
         if (pos >= json.length) {
-            return fail("unterminated escape");
+            return fail(ParseErrors.unterminatedEscape());
         }
         char e = json[pos++];
         switch (e) {
@@ -690,18 +690,18 @@ public final class Utf16Parser implements JoltParser {
             case 'u' -> {
                 for (int i = 0; i < 4; i++) {
                     if (pos >= json.length) {
-                        return fail("truncated \\u escape");
+                        return fail(ParseErrors.truncatedUnicodeEscape());
                     }
                     char h = json[pos++];
                     boolean isHexDigit = (h >= '0' && h <= '9') || (h >= 'a' && h <= 'f') || (h >= 'A' && h <= 'F');
                     if (!isHexDigit) {
-                        return fail("invalid hex digit in \\u escape");
+                        return fail(ParseErrors.invalidHexDigitInUnicodeEscape());
                     }
                 }
                 return true;
             }
             default -> {
-                return fail("invalid escape '\\" + e + "'");
+                return fail(ParseErrors.invalidEscapeChar(e));
             }
         }
     }
@@ -710,7 +710,7 @@ public final class Utf16Parser implements JoltParser {
         int len = literal.length();
         for (int i = 1; i < len; i++) {
             if (pos >= json.length || json[pos] != literal.charAt(i)) {
-                return fail("invalid literal, expected '" + literal + "'");
+                return fail(ParseErrors.invalidLiteral(literal));
             }
             pos++;
         }
@@ -731,7 +731,7 @@ public final class Utf16Parser implements JoltParser {
             p++;
         }
         if (p >= json.length) {
-            return failInt("digit required after '-'");
+            return failInt(ParseErrors.digitRequiredAfterMinus());
         }
         if (json[p] == '0') {
             p++; // a leading zero is never followed by more integer digits
@@ -740,14 +740,14 @@ public final class Utf16Parser implements JoltParser {
                 p++;
             }
         } else {
-            return failInt("digit required in number");
+            return failInt(ParseErrors.digitRequiredInNumber());
         }
         boolean isFloat = false;
         if (p < json.length && json[p] == '.') {
             isFloat = true;
             p++;
             if (p >= json.length || !isDigit(json[p])) {
-                return failInt("digit required after '.'");
+                return failInt(ParseErrors.digitRequiredAfterDot());
             }
             while (p < json.length && isDigit(json[p])) {
                 p++;
@@ -760,7 +760,7 @@ public final class Utf16Parser implements JoltParser {
                 p++;
             }
             if (p >= json.length || !isDigit(json[p])) {
-                return failInt("digit required in exponent");
+                return failInt(ParseErrors.digitRequiredInExponent());
             }
             while (p < json.length && isDigit(json[p])) {
                 p++;
@@ -776,7 +776,7 @@ public final class Utf16Parser implements JoltParser {
     /** Skips a comment; the cursor sits just past the consumed '/'. */
     private boolean skipComment() {
         if (pos >= json.length) {
-            return fail("unterminated comment");
+            return fail(ParseErrors.unterminatedComment());
         }
         char c = json[pos];
         if (c == '/') {
@@ -789,7 +789,7 @@ public final class Utf16Parser implements JoltParser {
             pos++;
             while (true) {
                 if (pos + 1 >= json.length) {
-                    return fail("unterminated comment");
+                    return fail(ParseErrors.unterminatedComment());
                 }
                 if (json[pos] == '*' && json[pos + 1] == '/') {
                     pos += 2;
@@ -798,7 +798,7 @@ public final class Utf16Parser implements JoltParser {
                 pos++;
             }
         }
-        return fail("malformed comment");
+        return fail(ParseErrors.malformedComment());
     }
 
     private static boolean isDigit(char c) {
