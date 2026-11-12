@@ -8,6 +8,7 @@ import net.bytebuddy.jar.asm.Type;
 
 import java.lang.reflect.Modifier;
 
+import static io.github.chutian0610.jolt.gen.Emit.BIND_PATH;
 import static io.github.chutian0610.jolt.gen.Emit.DIRECT_SUPPORT;
 import static io.github.chutian0610.jolt.gen.Emit.GEN_BASE;
 import static io.github.chutian0610.jolt.gen.Emit.GEN_BASE_PARSE_TOKENS_BODY_DESC;
@@ -245,8 +246,7 @@ final class InlineCollections {
         mv.visitJumpInsn(Opcodes.IF_ACMPEQ, end);
         mv.visitVarInsn(Opcodes.ALOAD, body.carrier());
         mv.visitVarInsn(Opcodes.ILOAD, idx);
-        mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushIndex",
-                "(Ljava/lang/Object;I)V", false);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, BIND_PATH, "pushIndex", "(I)V", false);
         emitElement(mv, body, element, component, depth + 1, stackBase);
         mv.visitVarInsn(Opcodes.ALOAD, ref);
         mv.visitTypeInsn(Opcodes.CHECKCAST, "java/util/ArrayList");
@@ -255,8 +255,7 @@ final class InlineCollections {
                 "(Ljava/lang/Object;)Z", false);
         mv.visitInsn(Opcodes.POP);
         mv.visitVarInsn(Opcodes.ALOAD, body.carrier());
-        mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop",
-                "(Ljava/lang/Object;)V", false);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, BIND_PATH, "pop", "()V", false);
         mv.visitIincInsn(idx, 1);
         mv.visitJumpInsn(Opcodes.GOTO, head);
         mv.visitLabel(end);
@@ -296,8 +295,8 @@ final class InlineCollections {
         mv.visitVarInsn(Opcodes.ASTORE, body.valueToken());
         mv.visitVarInsn(Opcodes.ALOAD, body.carrier());
         mv.visitVarInsn(Opcodes.ALOAD, key);
-        mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
-                "(Ljava/lang/Object;Ljava/lang/String;)V", false);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, BIND_PATH, "pushName",
+                "(Ljava/lang/String;)V", false);
         emitElement(mv, body, value, component, depth + 1, stackBase);
         mv.visitVarInsn(Opcodes.ALOAD, ref);
         mv.visitTypeInsn(Opcodes.CHECKCAST, "java/util/LinkedHashMap");
@@ -308,8 +307,7 @@ final class InlineCollections {
                 "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", false);
         mv.visitInsn(Opcodes.POP);
         mv.visitVarInsn(Opcodes.ALOAD, body.carrier());
-        mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop",
-                "(Ljava/lang/Object;)V", false);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, BIND_PATH, "pop", "()V", false);
         mv.visitJumpInsn(Opcodes.GOTO, head);
         mv.visitLabel(end);
         body.slots().emit(mv, stackBase);
@@ -340,8 +338,7 @@ final class InlineCollections {
         mv.visitJumpInsn(Opcodes.IF_ACMPEQ, end);
         mv.visitVarInsn(Opcodes.ALOAD, body.carrier());
         mv.visitVarInsn(Opcodes.ILOAD, len);
-        mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushIndex",
-                "(Ljava/lang/Object;I)V", false);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, BIND_PATH, "pushIndex", "(I)V", false);
         // the pooled scratch grows exactly like the door's readArray:
         // if (len == buffer.length) { grown = new Object[len * 2]; copy; buffer = grown; }
         Label grown = new Label();
@@ -376,8 +373,7 @@ final class InlineCollections {
         mv.visitInsn(Opcodes.SWAP);
         mv.visitInsn(Opcodes.AASTORE);
         mv.visitVarInsn(Opcodes.ALOAD, body.carrier());
-        mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop",
-                "(Ljava/lang/Object;)V", false);
+        mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, BIND_PATH, "pop", "()V", false);
         mv.visitIincInsn(len, 1);
         mv.visitJumpInsn(Opcodes.GOTO, head);
         mv.visitLabel(end);

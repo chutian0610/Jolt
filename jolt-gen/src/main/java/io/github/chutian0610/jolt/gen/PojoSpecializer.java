@@ -18,6 +18,7 @@ import net.bytebuddy.jar.asm.Type;
 import io.github.chutian0610.jolt.bind.PojoSupport;
 import java.lang.reflect.Method;
 
+import static io.github.chutian0610.jolt.gen.Emit.BIND_PATH;
 import static io.github.chutian0610.jolt.gen.Emit.BIND_EXCEPTION;
 import static io.github.chutian0610.jolt.gen.Emit.BIND_INTERNAL;
 import static io.github.chutian0610.jolt.gen.Emit.CHILD_FIELD_PREFIX;
@@ -667,7 +668,7 @@ final class PojoSpecializer {
             // reference, so order matters
             frameLocals[INSTANCE] = Opcodes.TOP;
             if (extra > 0) {
-                frameLocals[carrierSlot()] = "java/lang/Object";
+                frameLocals[carrierSlot()] = BIND_PATH;
                 frameLocals[componentDepthSlot()] = Opcodes.INTEGER;
                 for (int d = 0; d < loopsDepth; d++) {
                     int cell = scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH;
