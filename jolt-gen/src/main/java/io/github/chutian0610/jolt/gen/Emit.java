@@ -51,6 +51,7 @@ final class Emit {
                     + "Lio/github/chutian0610/jolt/bind/BindConfig;"
                     + "Ljava/lang/Class;)Ljava/lang/Object;";
     static final String DIRECT_SUPPORT = internal(io.github.chutian0610.jolt.bind.DirectSupport.class);
+    static final String BIND_PATH = internal(io.github.chutian0610.jolt.bind.BindPath.class);
     static final String PARSER = internal(io.github.chutian0610.jolt.JoltParser.class);
     static final String TOKEN_INTERNAL = internal(io.github.chutian0610.jolt.Token.class);
     static final String TOKEN_DESC = "L" + TOKEN_INTERNAL + ";";

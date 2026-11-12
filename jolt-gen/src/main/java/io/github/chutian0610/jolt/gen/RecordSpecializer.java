@@ -18,6 +18,7 @@ import net.bytebuddy.jar.asm.Type;
 
 import java.lang.reflect.Method;
 
+import static io.github.chutian0610.jolt.gen.Emit.BIND_PATH;
 import static io.github.chutian0610.jolt.gen.Emit.BIND_EXCEPTION;
 import static io.github.chutian0610.jolt.gen.Emit.BIND_INTERNAL;
 import static io.github.chutian0610.jolt.gen.Emit.CHILD_FIELD_PREFIX;
@@ -733,7 +734,7 @@ final class RecordSpecializer {
                 frameLocals[FIRST_COMPONENT + i] = frameType(rawOf(plan.genericTypes[i]));
             }
             if (extra > 0) {
-                frameLocals[FIRST_COMPONENT + n] = "java/lang/Object";     // the carrier
+                frameLocals[FIRST_COMPONENT + n] = BIND_PATH;              // the carrier
                 frameLocals[FIRST_COMPONENT + n + 1] = Opcodes.INTEGER;    // the saved depth
                 for (int d = 0; d < loopsDepth; d++) {
                     int cell = FIRST_COMPONENT + n + 2 + d * InlineCollections.CELLS_PER_DEPTH;
