@@ -105,30 +105,20 @@ final class DirectBinder<T> implements TypedBinder<T> {
     }
 
     private static Plan planClass(Class<?> raw, boolean primitive, String simpleName) {
-        if (raw == String.class || raw == boolean.class || raw == Boolean.class
-                || raw == byte.class || raw == Byte.class || raw == short.class || raw == Short.class
-                || raw == int.class || raw == Integer.class || raw == long.class || raw == Long.class
-                || raw == float.class || raw == Float.class || raw == double.class || raw == Double.class
-                || raw == java.math.BigDecimal.class || raw == java.math.BigInteger.class) {
-            return new Plan.PScalar(raw, primitive, simpleName);
-        }
-        if (raw.isEnum()) {
-            return new Plan.PEnum(raw);
-        }
-        if (raw == Object.class) {
-            return new Plan.PNatural();
-        }
-        if (raw.isRecord()) {
-            return new Plan.PRecord(raw);
-        }
-        if (raw.isArray()) {
-            return planArray(raw.getComponentType());
-        }
-        if (!raw.isInterface() && !java.lang.reflect.Modifier.isAbstract(raw.getModifiers())) {
-            return new Plan.PPojo(raw);
-        }
-        return new Plan.PUnsupported("polymorphic binding is not supported for "
-                + raw.getSimpleName());
+        return switch (BindingShape.of(raw)) {
+            // PScalar keeps the raw/primitive/simpleName triple: the scalar arms read all three
+            case TEXT, BOOLEAN, NUMBER -> new Plan.PScalar(raw, primitive, simpleName);
+            case ENUM -> new Plan.PEnum(raw);
+            case RECORD -> new Plan.PRecord(raw);
+            case ARRAY -> planArray(raw.getComponentType());
+            case NATURAL -> new Plan.PNatural();
+            case POJO -> new Plan.PPojo(raw);
+            // LIST, MAP: a bare (unparameterized) raw — refused with the polymorphic message
+            // it always had falling through as an interface; the parameterized dispatch is
+            // planOf's
+            case LIST, MAP, UNBOUND -> new Plan.PUnsupported("polymorphic binding is not supported for "
+                    + raw.getSimpleName());
+        };
     }
 
     private final Shape shape;
@@ -549,39 +539,15 @@ final class DirectBinder<T> implements TypedBinder<T> {
         }
     }
 
-    /** Natural mapping numbers: integral text → Long (overflow → BigDecimal), else Double
-     * (infinite → BigDecimal) — the tree path's naturalNumber, token-for-token. */
+    /** Natural mapping numbers: the shared narrowing ({@code BindValues.narrowNatural}) fed
+     * from the parser — integral text → Long (overflow → the parser's exact wide form), else
+     * Double (infinite → wide). The double parse stays lazy: integral text never touches it. */
     private static Object naturalInt(JoltParser p) {
-        String text = p.numberText();
-        if (isIntegralForm(text)) {
-            try {
-                return Long.valueOf(text);
-            } catch (NumberFormatException beyondLong) {
-                return p.bigDecimalValue(); // the exact wide form
-            }
-        }
-        double d = p.doubleValue();
-        return Double.isInfinite(d) ? p.bigDecimalValue() : d;
+        return BindValues.narrowNatural(p.numberText(), p::doubleValue, p::bigDecimalValue);
     }
 
     private static Object naturalFloat(JoltParser p) {
-        double d = p.doubleValue();
-        return Double.isInfinite(d) ? p.bigDecimalValue() : d;
-    }
-
-    /** Optional sign followed by digits only — no regex compilation per untyped number. */
-    private static boolean isIntegralForm(String text) {
-        int start = text.startsWith("-") ? 1 : 0;
-        if (start >= text.length()) {
-            return false;
-        }
-        for (int i = start; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (c < '0' || c > '9') {
-                return false;
-            }
-        }
-        return true;
+        return BindValues.narrowDouble(p.doubleValue(), p::bigDecimalValue);
     }
 
     private static Map<Object, Object> readNaturalObject(JoltParser p, BindConfig config,

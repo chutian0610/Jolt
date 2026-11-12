@@ -2,6 +2,7 @@ package io.github.chutian0610.jolt.gen;
 
 import io.github.chutian0610.jolt.JoltWriter;
 import io.github.chutian0610.jolt.bind.Bind;
+import io.github.chutian0610.jolt.bind.BindingShape;
 import io.github.chutian0610.jolt.bind.JsonBindException;
 import io.github.chutian0610.jolt.tree.Node;
 import net.bytebuddy.jar.asm.Label;
@@ -69,35 +70,23 @@ final class Emit {
 
     private Emit() {}
 
-    /** The per-component parse strategy, resolved once at generation time. */
+    /** The per-component parse strategy, resolved once at generation time: a thin
+     * projection of the shared {@link BindingShape} plus the capability predicate — the
+     * four inline scalars map one-to-one, a bindable record/POJO is CHILD, and everything
+     * else takes the door. */
     enum Kind {
         STRING, BOOLEAN, NUMBER, ENUM, CHILD, GENERIC
     }
 
     static Kind kindOf(Class<?> raw) {
-        if (raw == String.class) {
-            return Kind.STRING;
-        }
-        if (raw == boolean.class || raw == Boolean.class) {
-            return Kind.BOOLEAN;
-        }
-        if (raw.isEnum()) {
-            return Kind.ENUM;
-        }
-        if (isNumber(raw)) {
-            return Kind.NUMBER;
-        }
-        if (GeneratedBinders.isBindable(raw)) {
-            return Kind.CHILD;
-        }
-        return Kind.GENERIC;
-    }
-
-    static boolean isNumber(Class<?> raw) {
-        return raw == byte.class || raw == Byte.class || raw == short.class || raw == Short.class
-                || raw == int.class || raw == Integer.class || raw == long.class || raw == Long.class
-                || raw == float.class || raw == Float.class || raw == double.class || raw == Double.class
-                || raw == java.math.BigDecimal.class || raw == java.math.BigInteger.class;
+        return switch (BindingShape.of(raw)) {
+            case TEXT -> Kind.STRING;
+            case BOOLEAN -> Kind.BOOLEAN;
+            case NUMBER -> Kind.NUMBER;
+            case ENUM -> Kind.ENUM;
+            case RECORD, POJO -> GeneratedBinders.isBindable(raw) ? Kind.CHILD : Kind.GENERIC;
+            default -> Kind.GENERIC; // NATURAL, ARRAY, LIST, MAP, UNBOUND: the door
+        };
     }
 
     static Class<?> rawOf(java.lang.reflect.Type generic) {
