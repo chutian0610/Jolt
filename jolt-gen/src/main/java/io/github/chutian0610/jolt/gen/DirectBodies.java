@@ -1,5 +1,7 @@
 package io.github.chutian0610.jolt.gen;
 
+import io.github.chutian0610.jolt.bind.BindErrorText;
+import io.github.chutian0610.jolt.bind.BindingShape;
 import net.bytebuddy.jar.asm.Label;
 import net.bytebuddy.jar.asm.MethodVisitor;
 import net.bytebuddy.jar.asm.Opcodes;
@@ -219,7 +221,7 @@ final class DirectBodies {
         mv.visitJumpInsn(Opcodes.IF_ACMPEQ, nullEdge);
         switch (kindOf(raw)) {
             case STRING -> {
-                requireToken(mv, cx, t, "VALUE_STRING", "a string");
+                requireToken(mv, cx, t, "VALUE_STRING", BindErrorText.A_STRING);
                 mv.visitVarInsn(Opcodes.ALOAD, 1);
                 mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "textValue",
                         PARSER_TEXT_VALUE_DESC, true);
@@ -259,7 +261,7 @@ final class DirectBodies {
         mv.visitVarInsn(Opcodes.ALOAD, cx.valueToken());
         mv.visitFieldInsn(Opcodes.GETSTATIC, TOKEN_INTERNAL, "VALUE_FALSE", TOKEN_DESC);
         mv.visitJumpInsn(Opcodes.IF_ACMPEQ, falseEdge);
-        raiseTagError(mv, cx, "a boolean");
+        raiseTagError(mv, cx, BindErrorText.A_BOOLEAN);
         mv.visitLabel(trueEdge);
         frames(mv, cx, t);
         pushBoolean(mv, t, raw, true);
@@ -280,7 +282,7 @@ final class DirectBodies {
 
     private static void emitEnum(MethodVisitor mv, ReadContext cx, ValueTarget t,
                                  Class<?> raw, Label tryEnd, Label join) {
-        requireToken(mv, cx, t, "VALUE_STRING", "a string");
+        requireToken(mv, cx, t, "VALUE_STRING", BindErrorText.A_STRING);
         mv.visitVarInsn(Opcodes.ALOAD, 1);
         mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "textValue",
                 PARSER_TEXT_VALUE_DESC, true);
@@ -327,7 +329,7 @@ final class DirectBodies {
         // parent dispatches per the child's own shape. NOT one rule (the three-grade
         // matrix catches the difference: the monomorphic arm calls the child's ROOT-form
         // body, the door binds it nested).
-        requireToken(mv, cx, t, "START_OBJECT", "an object");
+        requireToken(mv, cx, t, "START_OBJECT", BindErrorText.AN_OBJECT);
         if (t.childCapable()) {
             mv.visitVarInsn(Opcodes.ALOAD, 0);
             mv.visitFieldInsn(Opcodes.GETFIELD, cx.self(), CHILD_FIELD_PREFIX + component,
@@ -495,14 +497,9 @@ final class DirectBodies {
 
     // --- the shared scaffolding ---------------------------------------------------------
 
-    /** The width-bound table, one copy (was five across the emitter families + the doors). */
+    /** The width-bound table, one copy behind the shared classification. */
     private static long boundOf(Class<?> raw) {
-        return switch (raw.getName()) {
-            case "byte", "java.lang.Byte" -> Byte.MAX_VALUE;
-            case "short", "java.lang.Short" -> Short.MAX_VALUE;
-            case "int", "java.lang.Integer" -> Integer.MAX_VALUE;
-            default -> Long.MAX_VALUE;
-        };
+        return BindingShape.longBoundMax(raw);
     }
 
     /**

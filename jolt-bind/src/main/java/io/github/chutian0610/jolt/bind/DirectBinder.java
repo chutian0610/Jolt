@@ -116,8 +116,8 @@ final class DirectBinder<T> implements TypedBinder<T> {
             // LIST, MAP: a bare (unparameterized) raw — refused with the polymorphic message
             // it always had falling through as an interface; the parameterized dispatch is
             // planOf's
-            case LIST, MAP, UNBOUND -> new Plan.PUnsupported("polymorphic binding is not supported for "
-                    + raw.getSimpleName());
+            case LIST, MAP, UNBOUND -> new Plan.PUnsupported(
+                    BindErrorText.polymorphicUnsupported(raw.getSimpleName()));
         };
     }
 
@@ -419,7 +419,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
                 switch (raw.getSimpleName()) {
                     case "String" -> {
                         if (t != Token.VALUE_STRING) {
-                            throw DirectSupport.tagError(p, t, "a string", path);
+                            throw DirectSupport.tagError(p, t, BindErrorText.A_STRING, path);
                         }
                         return p.textValue();
                     }
@@ -430,25 +430,28 @@ final class DirectBinder<T> implements TypedBinder<T> {
                         if (t == Token.VALUE_FALSE) {
                             return Boolean.FALSE;
                         }
-                        throw DirectSupport.tagError(p, t, "a boolean", path);
+                        throw DirectSupport.tagError(p, t, BindErrorText.A_BOOLEAN, path);
                     }
                     case "byte", "Byte" -> {
                         long v = DirectSupport.readLongChecked(p, t, path);
-                        if (v > Byte.MAX_VALUE || v < Byte.MIN_VALUE) {
+                        long bound = BindingShape.longBoundMax(scalar.raw());
+                        if (v > bound || v < -bound - 1) {
                             throw DirectSupport.boundError(scalar.simpleName(), path);
                         }
                         return Byte.valueOf((byte) v);
                     }
                     case "short", "Short" -> {
                         long v = DirectSupport.readLongChecked(p, t, path);
-                        if (v > Short.MAX_VALUE || v < Short.MIN_VALUE) {
+                        long bound = BindingShape.longBoundMax(scalar.raw());
+                        if (v > bound || v < -bound - 1) {
                             throw DirectSupport.boundError(scalar.simpleName(), path);
                         }
                         return Short.valueOf((short) v);
                     }
                     case "int", "Integer" -> {
                         long v = DirectSupport.readLongChecked(p, t, path);
-                        if (v > Integer.MAX_VALUE || v < Integer.MIN_VALUE) {
+                        long bound = BindingShape.longBoundMax(scalar.raw());
+                        if (v > bound || v < -bound - 1) {
                             throw DirectSupport.boundError(scalar.simpleName(), path);
                         }
                         return Integer.valueOf((int) v);
@@ -480,7 +483,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
             }
             case Plan.PEnum enumPlan -> {
                 if (t != Token.VALUE_STRING) {
-                    throw DirectSupport.tagError(p, t, "a string", path);
+                    throw DirectSupport.tagError(p, t, BindErrorText.A_STRING, path);
                 }
                 String text = p.textValue();
                 try {
@@ -495,8 +498,8 @@ final class DirectBinder<T> implements TypedBinder<T> {
             }
             case Plan.PMap mapPlan -> {
                 if (!mapPlan.stringKeys()) {
-                    throw new JsonBindException("map keys must be String, got "
-                            + mapPlan.keyTypeName(), path.resolve());
+                    throw new JsonBindException(
+                            BindErrorText.mapKeysMustBeString(mapPlan.keyTypeName()), path.resolve());
                 }
                 return readMap(p, t, mapPlan, config, path);
             }
@@ -506,7 +509,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
 
             case Plan.PRecord recordPlan -> {
                 if (t != Token.START_OBJECT) {
-                    throw DirectSupport.tagError(p, t, "an object", path);
+                    throw DirectSupport.tagError(p, t, BindErrorText.AN_OBJECT, path);
                 }
                 // the child's OWN binder carries the child's component table — recursion
                 // happens at runtime through the cache (self-referential records converge;
@@ -598,7 +601,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
     private static List<Object> readList(JoltParser p, Token first, Plan.PList listPlan,
                                   BindConfig config, BindPath path) {
         if (first != Token.START_ARRAY) {
-            throw DirectSupport.tagError(p, first, "an array", path);
+            throw DirectSupport.tagError(p, first, BindErrorText.AN_ARRAY, path);
         }
         List<Object> out = new ArrayList<>();
         int i = 0;
@@ -626,7 +629,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
     private static Map<Object, Object> readMap(JoltParser p, Token first, Plan.PMap mapPlan,
                                         BindConfig config, BindPath path) {
         if (first != Token.START_OBJECT) {
-            throw DirectSupport.tagError(p, first, "an object", path);
+            throw DirectSupport.tagError(p, first, BindErrorText.AN_OBJECT, path);
         }
         Map<Object, Object> out = new LinkedHashMap<>();
         Token look = p.nextToken();
@@ -658,7 +661,7 @@ final class DirectBinder<T> implements TypedBinder<T> {
                              BindConfig config, BindPath path) {
         Class<?> raw = arrayPlan.raw();
         if (first != Token.START_ARRAY) {
-            throw DirectSupport.tagError(p, first, "an array", path);
+            throw DirectSupport.tagError(p, first, BindErrorText.AN_ARRAY, path);
         }
         Object[] buffer = DirectSupport.takeBuffer();
         int len = 0;

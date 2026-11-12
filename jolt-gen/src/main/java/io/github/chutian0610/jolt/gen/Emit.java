@@ -2,6 +2,7 @@ package io.github.chutian0610.jolt.gen;
 
 import io.github.chutian0610.jolt.JoltWriter;
 import io.github.chutian0610.jolt.bind.Bind;
+import io.github.chutian0610.jolt.bind.BindErrorText;
 import io.github.chutian0610.jolt.bind.BindingShape;
 import io.github.chutian0610.jolt.bind.JsonBindException;
 import io.github.chutian0610.jolt.tree.Node;
@@ -205,7 +206,7 @@ final class Emit {
                 // an exception handler enters with a CLEARED operand stack, exception on top only
                 slots.emit(mv, "java/lang/ArithmeticException");
                 mv.visitInsn(Opcodes.POP);
-                emitBindThrow(mv, () -> mv.visitLdcInsn("number is not a whole number"),
+                emitBindThrow(mv, () -> mv.visitLdcInsn(BindErrorText.NOT_WHOLE_NUMBER),
                         () -> emitValuePath(mv, name));
                 mv.visitLabel(boxed);
                 slots.emit(mv, withStack(stackPrefix, "java/math/BigInteger"));
@@ -247,12 +248,7 @@ final class Emit {
         mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, NODE, "asLong", "()J", false);
         mv.visitLabel(tryEnd);
 
-        long bound = switch (raw.getName()) {
-            case "byte", "java.lang.Byte" -> Byte.MAX_VALUE;
-            case "short", "java.lang.Short" -> Short.MAX_VALUE;
-            case "int", "java.lang.Integer" -> Integer.MAX_VALUE;
-            default -> Long.MAX_VALUE;
-        };
+        long bound = BindingShape.longBoundMax(raw);
         if (bound != Long.MAX_VALUE) {
             Label inRange = new Label();
             Label overFirst = new Label();
@@ -272,12 +268,12 @@ final class Emit {
             // ASM's frame API: one LONG entry per value (it expands to two slots itself)
             slots.emit(mv, withStack(stackPrefix, Opcodes.LONG, Opcodes.LONG));
             emitBindThrow(mv,
-                    () -> mv.visitLdcInsn("number does not fit in " + raw.getSimpleName()),
+                    () -> mv.visitLdcInsn(BindErrorText.boundError(raw.getSimpleName())),
                     () -> emitValuePath(mv, name));
             mv.visitLabel(overSecond);
             slots.emit(mv, withStack(stackPrefix, Opcodes.LONG));
             emitBindThrow(mv,
-                    () -> mv.visitLdcInsn("number does not fit in " + raw.getSimpleName()),
+                    () -> mv.visitLdcInsn(BindErrorText.boundError(raw.getSimpleName())),
                     () -> emitValuePath(mv, name));
             mv.visitLabel(inRange);
             slots.emit(mv, withStack(stackPrefix, Opcodes.LONG));
@@ -340,7 +336,7 @@ final class Emit {
         mv.visitLabel(handler);
         slots.emit(mv, "java/lang/ArithmeticException");
         mv.visitInsn(Opcodes.POP);
-        emitBindThrow(mv, () -> mv.visitLdcInsn("number does not fit in a long"),
+        emitBindThrow(mv, () -> mv.visitLdcInsn(BindErrorText.LONG_OVERFLOW),
                 () -> emitValuePath(mv, name));
         mv.visitLabel(uncaught);
         slots.emit(mv, withStack(stackPrefix, stackTop));
@@ -378,11 +374,11 @@ final class Emit {
         mv.visitInsn(Opcodes.POP);
         emitBindThrow(mv,
                 () -> emitConcat(mv, () -> {
-                    mv.visitLdcInsn("unknown enum name '");
+                    mv.visitLdcInsn(BindErrorText.UNKNOWN_ENUM_OPEN);
                     appendText(mv);
                     mv.visitVarInsn(Opcodes.ALOAD, 6);
                     appendText(mv);
-                    mv.visitLdcInsn("' for " + raw.getSimpleName());
+                    mv.visitLdcInsn(BindErrorText.UNKNOWN_ENUM_MIDDLE + raw.getSimpleName());
                     appendText(mv);
                 }),
                 () -> emitValuePath(mv, name));

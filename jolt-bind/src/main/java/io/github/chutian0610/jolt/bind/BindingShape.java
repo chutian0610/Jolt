@@ -68,4 +68,27 @@ public enum BindingShape {
                 || raw == float.class || raw == Float.class || raw == double.class || raw == Double.class
                 || raw == BigDecimal.class || raw == BigInteger.class;
     }
+
+    /**
+     * The integer-width bound, one table: the symmetric upper bound for byte/short/int/long
+     * (primitive or box), {@code Long.MAX_VALUE} for the widest. The lower bound is always
+     * {@code -bound - 1} (exact for all four widths: {@code -(2^63-1)-1 == Long.MIN_VALUE} in
+     * long math) — the runtime checks and the generation-time emitters bake the same constant.
+     * Non-integer widths throw: the callers have already classified via {@link #of}.
+     */
+    public static long longBoundMax(Class<?> raw) {
+        if (raw == byte.class || raw == Byte.class) {
+            return Byte.MAX_VALUE;
+        }
+        if (raw == short.class || raw == Short.class) {
+            return Short.MAX_VALUE;
+        }
+        if (raw == int.class || raw == Integer.class) {
+            return Integer.MAX_VALUE;
+        }
+        if (raw == long.class || raw == Long.class) {
+            return Long.MAX_VALUE;
+        }
+        throw new IllegalArgumentException("no integer bound for " + raw.getSimpleName());
+    }
 }

@@ -1,5 +1,6 @@
 package io.github.chutian0610.jolt.gen;
 
+import io.github.chutian0610.jolt.bind.BindErrorText;
 import net.bytebuddy.jar.asm.Label;
 import net.bytebuddy.jar.asm.MethodVisitor;
 import net.bytebuddy.jar.asm.Opcodes;
@@ -224,7 +225,7 @@ final class InlineCollections {
                                  int depth, Object[] stackBase) {
         int ref = body.refA(depth);
         int idx = body.intA(depth);
-        requireToken(mv, body, "START_ARRAY", "an array", stackBase);
+        requireToken(mv, body, "START_ARRAY", BindErrorText.AN_ARRAY, stackBase);
         mv.visitTypeInsn(Opcodes.NEW, "java/util/ArrayList");
         mv.visitInsn(Opcodes.DUP);
         mv.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/util/ArrayList", "<init>", "()V", false);
@@ -267,7 +268,7 @@ final class InlineCollections {
                                 int depth, Object[] stackBase) {
         int ref = body.refA(depth);
         int key = body.refB(depth);
-        requireToken(mv, body, "START_OBJECT", "an object", stackBase);
+        requireToken(mv, body, "START_OBJECT", BindErrorText.AN_OBJECT, stackBase);
         mv.visitTypeInsn(Opcodes.NEW, "java/util/LinkedHashMap");
         mv.visitInsn(Opcodes.DUP);
         mv.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/util/LinkedHashMap", "<init>", "()V",
@@ -320,7 +321,7 @@ final class InlineCollections {
         int buffer = body.refA(depth);
         int len = body.intA(depth);
         int scratch = body.refB(depth);
-        requireToken(mv, body, "START_ARRAY", "an array", stackBase);
+        requireToken(mv, body, "START_ARRAY", BindErrorText.AN_ARRAY, stackBase);
         mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "takeArrayScratch",
                 "()[Ljava/lang/Object;", false);
         mv.visitVarInsn(Opcodes.ASTORE, buffer);
@@ -515,7 +516,7 @@ final class InlineCollections {
      * component's baked element-child binder (the monomorphic dispatch). */
     private static void emitChild(MethodVisitor mv, Body body, Class<?> raw, int component,
                                   Object[] stackBase) {
-        requireToken(mv, body, "START_OBJECT", "an object", stackBase);
+        requireToken(mv, body, "START_OBJECT", BindErrorText.AN_OBJECT, stackBase);
         mv.visitVarInsn(Opcodes.ALOAD, 0);
         mv.visitFieldInsn(Opcodes.GETFIELD, body.self(),
                 Emit.ELEMENT_CHILD_FIELD_PREFIX + component, TYPED_BINDER_FIELD_DESC);

@@ -2,6 +2,7 @@ package io.github.chutian0610.jolt.bind;
 
 import io.github.chutian0610.jolt.JoltParser;
 import io.github.chutian0610.jolt.Token;
+import io.github.chutian0610.jolt.tree.TypeTag;
 import io.github.chutian0610.jolt.Utf16Parser;
 import io.github.chutian0610.jolt.Utf8Parser;
 
@@ -317,65 +318,75 @@ public final class DirectSupport {
             p.skipChildren();
         }
         throw new JsonBindException(
-                "expected " + wanted + " but found " + tagName(t), path.resolve());
+                BindErrorText.expectedButFound(wanted, tagName(t)), path.resolve());
     }
 
-    /** VALUE_NUMBER_INT or the promotion-strategy overflow message — the shared long read. */
+    /**
+     * The shared long read, the tree arm's {@code asLong} semantics: an integer-form token
+     * takes the fast path; a decimal-form token is accepted when its exact value fits a
+     * long ({@code 1.0 → 1L}) and rejected with the SAME overflow message otherwise — the
+     * two read paths are one error matrix (CONTEXT.md). The wide form only materializes on
+     * the decimal branch (rare; the failure path may allocate — ADR-0005).
+     */
     static long readLongChecked(JoltParser p, Token t, BindPath path) {
-        if (t != Token.VALUE_NUMBER_INT) {
-            throw tagError(p, t, "a number", path);
+        if (t == Token.VALUE_NUMBER_INT) {
+            try {
+                return p.longValue();
+            } catch (ArithmeticException beyondLong) {
+                throw new JsonBindException(BindErrorText.LONG_OVERFLOW, path.resolve());
+            }
+        }
+        if (t != Token.VALUE_NUMBER_FLOAT) {
+            throw tagError(p, t, BindErrorText.A_NUMBER, path);
         }
         try {
-            return p.longValue();
+            return p.bigDecimalValue().longValueExact();
         } catch (ArithmeticException beyondLong) {
-            throw new JsonBindException("number does not fit in a long", path.resolve());
+            throw new JsonBindException(BindErrorText.LONG_OVERFLOW, path.resolve());
         }
     }
 
     /** VALUE_NUMBER_INT or VALUE_NUMBER_FLOAT, else the tag rejection. */
     static void requireNumber(JoltParser p, Token t, BindPath path) {
         if (t != Token.VALUE_NUMBER_INT && t != Token.VALUE_NUMBER_FLOAT) {
-            throw tagError(p, t, "a number", path);
+            throw tagError(p, t, BindErrorText.A_NUMBER, path);
         }
     }
 
     /** JSON null against a primitive component — the shared throw. */
     static RuntimeException nullForPrimitive(String simpleName, BindPath path) {
-        throw new JsonBindException("JSON null for primitive component " + simpleName,
-                path.resolve());
+        throw new JsonBindException(BindErrorText.nullForPrimitive(simpleName), path.resolve());
     }
 
     /** The shared width-overflow throw (message from the component's getSimpleName). */
     static RuntimeException boundError(String simpleName, BindPath path) {
-        throw new JsonBindException("number does not fit in " + simpleName, path.resolve());
+        throw new JsonBindException(BindErrorText.boundError(simpleName), path.resolve());
     }
 
     /** The BigInteger fraction rejection. */
     static RuntimeException notWholeNumber(BindPath path) {
-        throw new JsonBindException("number is not a whole number", path.resolve());
+        throw new JsonBindException(BindErrorText.NOT_WHOLE_NUMBER, path.resolve());
     }
 
     /** The unknown-enum-name rejection. */
     static RuntimeException unknownEnumName(String text, String simpleName, BindPath path) {
-        throw new JsonBindException("unknown enum name '" + text + "' for " + simpleName,
+        throw new JsonBindException(BindErrorText.unknownEnumName(text, simpleName),
                 path.resolve());
     }
 
     /** The canonical constructor rejected the bound values. */
     static RuntimeException constructorRejected(Throwable cause, BindPath path) {
-        throw new JsonBindException("record constructor rejected the bound values: " + cause,
-                path.resolve());
+        throw new JsonBindException(BindErrorText.constructorRejected(cause), path.resolve());
     }
 
     /** The guarded setter invoke's rejection. */
     static JsonBindException setterRejected(Throwable cause, BindPath path) {
-        return new JsonBindException("setter rejected the bound value: " + cause,
-                path.resolve());
+        return new JsonBindException(BindErrorText.setterRejected(cause), path.resolve());
     }
 
     /** The no-arg construction failure. */
     static RuntimeException cannotInstantiate(String typeName, BindPath path) {
-        throw new JsonBindException("cannot instantiate " + typeName, path.resolve());
+        throw new JsonBindException(BindErrorText.cannotInstantiate(typeName), path.resolve());
     }
 
     /**
@@ -391,7 +402,7 @@ public final class DirectSupport {
             }
         }
         if (unknownKey != null) {
-            throw new JsonBindException("unknown field '" + unknownKey + "'",
+            throw new JsonBindException(BindErrorText.unknownField(unknownKey),
                     path.resolve() + "." + unknownKey);
         }
     }
@@ -408,25 +419,28 @@ public final class DirectSupport {
                 throw e;
             }
             if (!seen[i] && primitives[i]) {
-                throw new JsonBindException("missing value for primitive component "
-                        + simpleNames[i], path.resolve() + "." + names[i]);
+                throw new JsonBindException(BindErrorText.missingValueForPrimitive(simpleNames[i]),
+                        path.resolve() + "." + names[i]);
             }
         }
         if (unknownKey != null) {
-            throw new JsonBindException("unknown field '" + unknownKey + "'",
+            throw new JsonBindException(BindErrorText.unknownField(unknownKey),
                     path.resolve() + "." + unknownKey);
         }
     }
 
-    /** The tree layer's TypeTag names, from the streaming token. */
+    /**
+     * The found-part of a tag rejection: DERIVED from the tree layer's own {@link TypeTag}
+     * name, never hand-copied — a TypeTag rename follows, a Token addition fails to compile.
+     */
     private static String tagName(Token t) {
         return switch (t) {
-            case VALUE_STRING -> "STRING";
-            case VALUE_NUMBER_INT, VALUE_NUMBER_FLOAT -> "NUMBER";
-            case VALUE_TRUE, VALUE_FALSE -> "BOOLEAN";
-            case VALUE_NULL -> "NULL";
-            case START_OBJECT, FIELD_NAME -> "OBJECT";
-            case START_ARRAY -> "ARRAY";
+            case VALUE_STRING -> TypeTag.STRING.name();
+            case VALUE_NUMBER_INT, VALUE_NUMBER_FLOAT -> TypeTag.NUMBER.name();
+            case VALUE_TRUE, VALUE_FALSE -> TypeTag.BOOLEAN.name();
+            case VALUE_NULL -> TypeTag.NULL.name();
+            case START_OBJECT, FIELD_NAME -> TypeTag.OBJECT.name();
+            case START_ARRAY -> TypeTag.ARRAY.name();
             default -> throw new IllegalStateException("unexpected token " + t);
         };
     }

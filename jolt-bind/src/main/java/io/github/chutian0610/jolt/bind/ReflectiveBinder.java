@@ -99,7 +99,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
                     known |= component.getName().equals(key);
                 }
                 if (!known) {
-                    throw new JsonBindException("unknown field '" + key + "'", path + "." + key);
+                    throw new JsonBindException(BindErrorText.unknownField(key), path + "." + key);
                 }
             }
         }
@@ -132,7 +132,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
             try {
                 setter.invoke(instance, bound);
             } catch (InvocationTargetException e) {
-                throw new JsonBindException("setter rejected the bound value: " + e.getCause(),
+                throw new JsonBindException(BindErrorText.setterRejected(e.getCause()),
                         path + "." + key);
             } catch (ReflectiveOperationException e) {
                 throw new JsonBindException("cannot invoke setter for " + key, path + "." + key);
@@ -141,7 +141,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
         if (config.failOnUnknown()) {
             for (String key : node.keys()) {
                 if (setterFor(type, key) == null) {
-                    throw new JsonBindException("unknown field '" + key + "'", path + "." + key);
+                    throw new JsonBindException(BindErrorText.unknownField(key), path + "." + key);
                 }
             }
         }
@@ -186,7 +186,7 @@ final class ReflectiveBinder<T> implements TypedBinder<T> {
                 writer.fieldName(property);
                 BindWrites.writeTo(fieldValue, writer, path + "." + property);
             } catch (ReflectiveOperationException e) {
-                throw new JsonBindException("cannot read property " + property, path);
+                throw new JsonBindException(BindErrorText.cannotReadProperty(property), path);
             }
         }
     }
