@@ -187,10 +187,10 @@ final class RecordSpecializer {
                 .intercept(new Implementation.Simple(new ParseBody(self, plan)))
                 .defineMethod("write", void.class, Visibility.PUBLIC)
                 .withParameters(Object.class, JoltWriter.class)
-                .intercept(new Implementation.Simple(new WriteBody(plan, true)))
+                .intercept(new Implementation.Simple(new WriteBody(self, plan, true)))
                 .defineMethod("writeFields", void.class, Visibility.PUBLIC)
                 .withParameters(Object.class, JoltWriter.class, String.class)
-                .intercept(new Implementation.Simple(new WriteBody(plan, false)))
+                .intercept(new Implementation.Simple(new WriteBody(self, plan, false)))
                 .defineMethod(CheckUnknownBody.METHOD, void.class, Visibility.PUBLIC)
                 .withParameters(Node.class, java.util.Set.class, String.class)
                 .intercept(new Implementation.Simple(new CheckUnknownBody(self)))
@@ -912,10 +912,12 @@ final class RecordSpecializer {
      */
     private static final class WriteBody implements ByteCodeAppender {
 
+        private final String self;
         private final GenPlan<?> plan;
         private final boolean braces;
 
-        WriteBody(GenPlan<?> plan, boolean braces) {
+        WriteBody(String self, GenPlan<?> plan, boolean braces) {
+            this.self = self;
             this.plan = plan;
             this.braces = braces;
         }
@@ -924,24 +926,44 @@ final class RecordSpecializer {
         public Size apply(MethodVisitor mv, Implementation.Context context,
                           MethodDescription instrumentedMethod) {
             String recordInternal = internal(plan.type);
+            int locals = 5; // 0 this | 1 value | 2 writer | 3 path (writeFields) | 4 field value
             if (braces) {
                 mv.visitVarInsn(Opcodes.ALOAD, 2);
                 mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, Emit.WRITER, "startObject",
                         Emit.WRITER_START_DESC, false);
                 mv.visitInsn(Opcodes.POP);
             }
+            Emit.FrameTracker slots = new Emit.FrameTracker(self, locals);
+            slots.set(1, "java/lang/Object"); // the parameter's declared type — CHECKCAST
+            // narrows the operand stack only, never the local slot
+            slots.set(2, Emit.WRITER);
+            if (!braces) {
+                slots.set(3, "java/lang/String");
+            }
             for (int i = 0; i < plan.names.length; i++) {
                 Method accessor = plan.accessors[i];
                 String name = plan.names[i];
+                Label tryStart = new Label();
+                Label tryEnd = new Label();
+                Label handler = new Label();
+                Label next = new Label();
+                mv.visitTryCatchBlock(tryStart, tryEnd, handler, "java/lang/RuntimeException");
+                // the exception may arrive BEFORE the value slot is rewritten — its frame
+                // declares the shape the try region was entered with
+                Object[] handlerShape = slots.snapshot();
+                mv.visitLabel(tryStart);
                 mv.visitVarInsn(Opcodes.ALOAD, 1);
                 mv.visitTypeInsn(Opcodes.CHECKCAST, recordInternal);
                 mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, recordInternal, accessor.getName(),
                         Type.getMethodDescriptor(accessor), false);
                 Class<?> returnType = accessor.getReturnType();
                 if (returnType.isPrimitive()) {
-                    Emit.boxPrimitive(mv, returnType);
+                    slots.set(4, Emit.boxPrimitive(mv, returnType));
+                } else {
+                    slots.set(4, Emit.internal(returnType));
                 }
                 mv.visitVarInsn(Opcodes.ASTORE, 4);
+                mv.visitLabel(tryEnd);
                 mv.visitVarInsn(Opcodes.ALOAD, 2);
                 mv.visitLdcInsn(name);
                 mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, Emit.WRITER, "fieldName",
@@ -955,6 +977,24 @@ final class RecordSpecializer {
                         () -> mv.visitLdcInsn(name));
                 mv.visitMethodInsn(Opcodes.INVOKESTATIC, BIND_INTERNAL, "writeTo",
                         Emit.WRITE_TO_DESC, false);
+                mv.visitJumpInsn(Opcodes.GOTO, next);
+                mv.visitLabel(handler);
+                // exception entry clears the operand stack: [exception] only. The POJO twin
+                // and GenBinderBase.writeFields guard the same way — one error matrix for
+                // the accessor read across all three grades (the C7 asymmetry fix)
+                slots.emitFrom(mv, handlerShape, "java/lang/RuntimeException");
+                mv.visitInsn(Opcodes.POP);
+                emitBindThrow(mv,
+                        () -> mv.visitLdcInsn(BindErrorText.cannotReadProperty(name)),
+                        () -> {
+                            if (braces) {
+                                mv.visitLdcInsn("$");
+                            } else {
+                                mv.visitVarInsn(Opcodes.ALOAD, 3);
+                            }
+                        });
+                mv.visitLabel(next);
+                slots.emit(mv);
             }
             if (braces) {
                 mv.visitVarInsn(Opcodes.ALOAD, 2);
@@ -963,7 +1003,7 @@ final class RecordSpecializer {
                 mv.visitInsn(Opcodes.POP);
             }
             mv.visitInsn(Opcodes.RETURN);
-            return new Size(12, braces ? 5 : 6);
+            return new Size(16, 6);
         }
     }
 
