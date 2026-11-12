@@ -1,6 +1,7 @@
 package io.github.chutian0610.jolt.gen;
 
 import io.github.chutian0610.jolt.JoltWriter;
+import io.github.chutian0610.jolt.bind.BindErrorText;
 import io.github.chutian0610.jolt.bind.BindConfig;
 import io.github.chutian0610.jolt.bind.TypedBinder;
 import io.github.chutian0610.jolt.tree.Node;
@@ -286,7 +287,7 @@ final class PojoSpecializer {
             slots.emitFrom(mv, ctorHandlerShape, "java/lang/RuntimeException");
             mv.visitInsn(Opcodes.POP);
             emitBindThrow(mv,
-                    () -> mv.visitLdcInsn("cannot instantiate " + plan.type.getName()),
+                    () -> mv.visitLdcInsn(BindErrorText.cannotInstantiate(plan.type.getName())),
                     () -> mv.visitVarInsn(Opcodes.ALOAD, 2));
             mv.visitLabel(constructed);
             slots.emit(mv);
@@ -329,13 +330,13 @@ final class PojoSpecializer {
             Class<?> raw = rawOf(componentType(plan, i));
             boolean paramPrimitive = setter.getParameterTypes()[0].isPrimitive();
             switch (kindOf(raw)) {
-                case STRING -> emitScalar(mv, slots, i, setter, name, "STRING", "a string",
+                case STRING -> emitScalar(mv, slots, i, setter, name, "STRING", BindErrorText.A_STRING,
                         () -> {
                             mv.visitVarInsn(Opcodes.ALOAD, 5);
                             mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, NODE, "asText",
                                     "()Ljava/lang/String;", false);
                         });
-                case BOOLEAN -> emitScalar(mv, slots, i, setter, name, "BOOLEAN", "a boolean",
+                case BOOLEAN -> emitScalar(mv, slots, i, setter, name, "BOOLEAN", BindErrorText.A_BOOLEAN,
                         paramPrimitive
                                 ? () -> {
                                     mv.visitVarInsn(Opcodes.ALOAD, 5);
@@ -351,10 +352,10 @@ final class PojoSpecializer {
                                 });
                 // the receiver is preloaded beneath the value — every frame inside the
                 // numeric read declares it as the stack base
-                case NUMBER -> emitScalar(mv, slots, i, setter, name, "NUMBER", "a number",
+                case NUMBER -> emitScalar(mv, slots, i, setter, name, "NUMBER", BindErrorText.A_NUMBER,
                         () -> emitNumberRead(mv, slots, raw, name,
                                 new Object[]{pojoInternal}, paramPrimitive));
-                case ENUM -> emitScalar(mv, slots, i, setter, name, "STRING", "a string",
+                case ENUM -> emitScalar(mv, slots, i, setter, name, "STRING", BindErrorText.A_STRING,
                         () -> emitEnumRead(mv, slots, raw, name, new Object[0]));
                 case CHILD -> emitChild(mv, slots, i, setter, raw);
                 case GENERIC -> emitGeneric(mv, slots, i, setter);
@@ -396,7 +397,7 @@ final class PojoSpecializer {
             mv.visitJumpInsn(Opcodes.IF_ACMPEQ, read);
             emitBindThrow(mv,
                     () -> emitConcat(mv, () -> {
-                        mv.visitLdcInsn("expected " + wanted + " but found ");
+                        mv.visitLdcInsn(BindErrorText.EXPECTED_OPEN + wanted + BindErrorText.EXPECTED_MIDDLE);
                         appendText(mv);
                         mv.visitVarInsn(Opcodes.ALOAD, 5);
                         mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, NODE, "type",
@@ -418,8 +419,8 @@ final class PojoSpecializer {
             slots.emitFrom(mv, gateShape);
             if (primitive) {
                 emitBindThrow(mv,
-                        () -> mv.visitLdcInsn("JSON null for primitive component "
-                                + rawOf(componentType(plan, i)).getSimpleName()),
+                        () -> mv.visitLdcInsn(BindErrorText.nullForPrimitive(
+                                rawOf(componentType(plan, i)).getSimpleName())),
                         () -> emitValuePath(mv, name));
             } else {
                 pinValueSlotsIfEnum(mv, i);
@@ -464,7 +465,7 @@ final class PojoSpecializer {
                 mv.visitJumpInsn(Opcodes.IF_ACMPEQ, parse);
                 emitBindThrow(mv,
                         () -> emitConcat(mv, () -> {
-                            mv.visitLdcInsn("expected an object but found ");
+                            mv.visitLdcInsn(BindErrorText.EXPECTED_OPEN + BindErrorText.AN_OBJECT + BindErrorText.EXPECTED_MIDDLE);
                             appendText(mv);
                             mv.visitVarInsn(Opcodes.ALOAD, 5);
                             mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, NODE, "type",
@@ -553,7 +554,7 @@ final class PojoSpecializer {
             mv.visitVarInsn(Opcodes.ASTORE, 7);
             emitBindThrow(mv,
                     () -> emitConcat(mv, () -> {
-                        mv.visitLdcInsn("setter rejected the bound value: ");
+                        mv.visitLdcInsn(BindErrorText.SETTER_REJECTED_OPEN);
                         appendText(mv);
                         mv.visitVarInsn(Opcodes.ALOAD, 7);
                         appendObject(mv);
@@ -903,7 +904,7 @@ final class PojoSpecializer {
                 slots.emitFrom(mv, handlerShape, "java/lang/RuntimeException");
                 mv.visitInsn(Opcodes.POP);
                 emitBindThrow(mv,
-                        () -> mv.visitLdcInsn("cannot read property " + name),
+                        () -> mv.visitLdcInsn(BindErrorText.cannotReadProperty(name)),
                         () -> {
                             if (braces) {
                                 mv.visitLdcInsn("$");

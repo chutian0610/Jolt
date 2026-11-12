@@ -1,5 +1,6 @@
 package io.github.chutian0610.jolt.gen;
 
+import io.github.chutian0610.jolt.bind.BindErrorText;
 import net.bytebuddy.description.method.MethodDescription;
 import net.bytebuddy.implementation.Implementation;
 import net.bytebuddy.implementation.bytecode.ByteCodeAppender;
@@ -73,7 +74,7 @@ final class CheckUnknownBody implements ByteCodeAppender {
         mv.visitTypeInsn(Opcodes.NEW, BIND_EXCEPTION);
         mv.visitInsn(Opcodes.DUP);
         Emit.emitConcat(mv, () -> {
-            mv.visitLdcInsn("unknown field '");
+            mv.visitLdcInsn(BindErrorText.UNKNOWN_FIELD_OPEN);
             Emit.appendText(mv);
             mv.visitVarInsn(Opcodes.ALOAD, 5);
             Emit.appendText(mv);

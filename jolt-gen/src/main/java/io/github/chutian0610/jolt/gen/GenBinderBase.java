@@ -2,6 +2,7 @@ package io.github.chutian0610.jolt.gen;
 
 import io.github.chutian0610.jolt.JoltParser;
 import io.github.chutian0610.jolt.JoltWriter;
+import io.github.chutian0610.jolt.bind.BindErrorText;
 import io.github.chutian0610.jolt.bind.Bind;
 import io.github.chutian0610.jolt.bind.BindConfig;
 import io.github.chutian0610.jolt.bind.JsonBindException;
@@ -71,7 +72,7 @@ public class GenBinderBase implements TypedBinder<Object>, GeneratedFields {
             try {
                 fieldValue = plan.accessors[i].invoke(value);
             } catch (ReflectiveOperationException e) {
-                throw new JsonBindException("cannot read property " + name, path);
+                throw new JsonBindException(BindErrorText.cannotReadProperty(name), path);
             }
             writer.fieldName(name);
             Bind.writeTo(fieldValue, writer, path + "." + name);
@@ -91,15 +92,14 @@ public class GenBinderBase implements TypedBinder<Object>, GeneratedFields {
                     known |= name.equals(key);
                 }
                 if (!known) {
-                    throw new JsonBindException("unknown field '" + key + "'", path + "." + key);
+                    throw new JsonBindException(BindErrorText.unknownField(key), path + "." + key);
                 }
             }
         }
         try {
             return plan.constructor.newInstance(args);
         } catch (InvocationTargetException e) {
-            throw new JsonBindException("record constructor rejected the bound values: "
-                    + e.getCause(), path);
+            throw new JsonBindException(BindErrorText.constructorRejected(e.getCause()), path);
         } catch (ReflectiveOperationException e) {
             throw new JsonBindException("cannot construct " + plan.type.getName() + ": " + e, path);
         }
@@ -110,7 +110,7 @@ public class GenBinderBase implements TypedBinder<Object>, GeneratedFields {
         try {
             instance = plan.constructor.newInstance();
         } catch (ReflectiveOperationException e) {
-            throw new JsonBindException("cannot instantiate " + plan.type.getName(), path);
+            throw new JsonBindException(BindErrorText.cannotInstantiate(plan.type.getName()), path);
         }
         for (Method setter : plan.setters) {
             String key = PojoSupport.setterKey(setter);
@@ -123,7 +123,7 @@ public class GenBinderBase implements TypedBinder<Object>, GeneratedFields {
             try {
                 setter.invoke(instance, bound);
             } catch (InvocationTargetException e) {
-                throw new JsonBindException("setter rejected the bound value: " + e.getCause(),
+                throw new JsonBindException(BindErrorText.setterRejected(e.getCause()),
                         path + "." + key);
             } catch (ReflectiveOperationException e) {
                 throw new JsonBindException("cannot invoke setter for " + key, path + "." + key);
@@ -132,7 +132,7 @@ public class GenBinderBase implements TypedBinder<Object>, GeneratedFields {
         if (config.failOnUnknown()) {
             for (String key : node.keys()) {
                 if (!plan.nameSet.contains(key)) {
-                    throw new JsonBindException("unknown field '" + key + "'", path + "." + key);
+                    throw new JsonBindException(BindErrorText.unknownField(key), path + "." + key);
                 }
             }
         }

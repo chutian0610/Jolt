@@ -2,6 +2,7 @@ package io.github.chutian0610.jolt.gen;
 
 import io.github.chutian0610.jolt.JoltParser;
 import io.github.chutian0610.jolt.JoltWriter;
+import io.github.chutian0610.jolt.bind.BindErrorText;
 import io.github.chutian0610.jolt.bind.BindConfig;
 import io.github.chutian0610.jolt.bind.TypedBinder;
 import io.github.chutian0610.jolt.tree.Node;
@@ -357,7 +358,7 @@ final class RecordSpecializer {
             // base class's "…: " + getCause() shape.
             emitBindThrow(mv,
                     () -> emitConcat(mv, () -> {
-                        mv.visitLdcInsn("record constructor rejected the bound values: ");
+                        mv.visitLdcInsn(BindErrorText.CONSTRUCTOR_REJECTED_OPEN);
                         appendText(mv);
                         mv.visitVarInsn(Opcodes.ALOAD, 7);
                         appendObject(mv);
@@ -389,22 +390,22 @@ final class RecordSpecializer {
             Class<?> raw = rawOf(plan.genericTypes[i]);
             String name = plan.names[i];
             switch (kindOf(raw)) {
-                case STRING -> emitScalar(mv, slots, i, name, "STRING", "a string",
+                case STRING -> emitScalar(mv, slots, i, name, "STRING", BindErrorText.A_STRING,
                         prefix -> {
                             mv.visitVarInsn(Opcodes.ALOAD, 5);
                             mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, NODE, "asText",
                                     "()Ljava/lang/String;", false);
                         });
-                case BOOLEAN -> emitScalar(mv, slots, i, name, "BOOLEAN", "a boolean",
+                case BOOLEAN -> emitScalar(mv, slots, i, name, "BOOLEAN", BindErrorText.A_BOOLEAN,
                         prefix -> {
                             mv.visitVarInsn(Opcodes.ALOAD, 5);
                             mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, NODE, "asBoolean", "()Z", false);
                             mv.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/Boolean",
                                     "valueOf", "(Z)Ljava/lang/Boolean;", false);
                         });
-                case NUMBER -> emitScalar(mv, slots, i, name, "NUMBER", "a number",
+                case NUMBER -> emitScalar(mv, slots, i, name, "NUMBER", BindErrorText.A_NUMBER,
                         prefix -> emitNumberRead(mv, slots, raw, name, prefix, false));
-                case ENUM -> emitScalar(mv, slots, i, name, "STRING", "a string",
+                case ENUM -> emitScalar(mv, slots, i, name, "STRING", BindErrorText.A_STRING,
                         prefix -> emitEnumRead(mv, slots, raw, name, prefix));
                 case CHILD -> emitChild(mv, slots, i, raw);
                 case GENERIC -> emitGeneric(mv, slots, i);
@@ -445,7 +446,7 @@ final class RecordSpecializer {
             // tag mismatch (fall-through): throw with the value's path
             emitBindThrow(mv,
                     () -> emitConcat(mv, () -> {
-                        mv.visitLdcInsn("expected " + wanted + " but found ");
+                        mv.visitLdcInsn(BindErrorText.EXPECTED_OPEN + wanted + BindErrorText.EXPECTED_MIDDLE);
                         appendText(mv);
                         mv.visitVarInsn(Opcodes.ALOAD, 5);
                         mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, NODE, "type",
@@ -467,14 +468,14 @@ final class RecordSpecializer {
                 mv.visitLabel(missThrow);
                 slots.emitFrom(mv, gateShape);
                 emitBindThrow(mv,
-                        () -> mv.visitLdcInsn("missing value for primitive component "
-                                + rawOf(plan.genericTypes[i]).getSimpleName()),
+                        () -> mv.visitLdcInsn(BindErrorText.missingValueForPrimitive(
+                                rawOf(plan.genericTypes[i]).getSimpleName())),
                         () -> emitValuePath(mv, name));
                 mv.visitLabel(nullThrow);
                 slots.emitFrom(mv, gateShape);
                 emitBindThrow(mv,
-                        () -> mv.visitLdcInsn("JSON null for primitive component "
-                                + rawOf(plan.genericTypes[i]).getSimpleName()),
+                        () -> mv.visitLdcInsn(BindErrorText.nullForPrimitive(
+                                rawOf(plan.genericTypes[i]).getSimpleName())),
                         () -> emitValuePath(mv, name));
             } else {
                 mv.visitLabel(nullStore);
@@ -515,7 +516,7 @@ final class RecordSpecializer {
                 mv.visitJumpInsn(Opcodes.IF_ACMPEQ, parse);
                 emitBindThrow(mv,
                         () -> emitConcat(mv, () -> {
-                            mv.visitLdcInsn("expected an object but found ");
+                            mv.visitLdcInsn(BindErrorText.EXPECTED_OPEN + BindErrorText.AN_OBJECT + BindErrorText.EXPECTED_MIDDLE);
                             appendText(mv);
                             mv.visitVarInsn(Opcodes.ALOAD, 5);
                             mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, NODE, "type",

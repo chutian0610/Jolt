@@ -39,6 +39,9 @@ class ThreeGradeMatrixGateTest {
     /** Capable: scalars + enum + a nested RECORD child. */
     public record Outer(String label, Inner inner, long total) {}
 
+    /** The long-width cell's own fixture (C5): one three-grade cell, first in the method. */
+    public record LongCell(long v) {}
+
     /** A NON-capable record child (a collection component) — the reflective door's arm. */
     public record Leafy(String name, List<Integer> scores) {}
 
@@ -191,6 +194,11 @@ class ThreeGradeMatrixGateTest {
     @Test
     void recordSpectrumPairwiseMatrix() {
         // one three-grade cell per fixture, while it is still ungenerated
+        // the long width (C5): an exact decimal form binds on all three grades (1.0 -> 1L,
+        // the tree arm's asLong semantics), a fractional form rejects with the SAME overflow
+        // message — one error matrix, one message home
+        assertThreeGradesBind("{\"v\":1.0}", LongCell.class);
+        assertThreeGradesFail("{\"v\":1.5}", LongCell.class);
         assertThreeGradesFail("{\"label\":\"a\",\"inner\":{\"x\":true,\"price\":1.5,"
                 + "\"tier\":\"BASIC\"},\"total\":1}", Outer.class); // $.inner.x, three grades
         assertThreeGradesBind("{\"id\":\"i\",\"leaf\":{\"name\":\"n\",\"scores\":[1,2,3]}}",

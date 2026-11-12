@@ -31,8 +31,9 @@ final class BindValues {
         if (field == null || field.type() == TypeTag.NULL) {
             boolean missing = field == null;
             if (target instanceof Class<?> raw && raw.isPrimitive()) {
-                throw new JsonBindException((missing ? "missing value for" : "JSON null for")
-                        + " primitive component " + raw.getSimpleName(), path);
+                throw new JsonBindException(missing
+                        ? BindErrorText.missingValueForPrimitive(raw.getSimpleName())
+                        : BindErrorText.nullForPrimitive(raw.getSimpleName()), path);
             }
             return null;
         }
@@ -43,7 +44,7 @@ final class BindValues {
             return toGenericArray(field, genericArray.getGenericComponentType(), path, config);
         }
         if (!(target instanceof Class<?> raw)) {
-            throw new JsonBindException("unsupported component type " + target, path);
+            throw new JsonBindException(BindErrorText.unsupportedComponentType(target), path);
         }
         if (raw.isArray()) {
             return toArray(field, raw.getComponentType(), path, config);
@@ -55,7 +56,7 @@ final class BindValues {
         var raw = (Class<?>) type.getRawType();
         var arguments = type.getActualTypeArguments();
         if (raw == List.class) {
-            requireTag(field, TypeTag.ARRAY, "an array", path);
+            requireTag(field, TypeTag.ARRAY, BindErrorText.AN_ARRAY, path);
             List<Object> out = new java.util.ArrayList<>();
             List<Node> elements = field.elements();
             for (int i = 0; i < elements.size(); i++) {
@@ -65,16 +66,16 @@ final class BindValues {
         }
         if (raw == Map.class) {
             if (arguments[0] != String.class) {
-                throw new JsonBindException("map keys must be String, got " + arguments[0], path);
+                throw new JsonBindException(BindErrorText.mapKeysMustBeString(arguments[0].getTypeName()), path);
             }
-            requireTag(field, TypeTag.OBJECT, "an object", path);
+            requireTag(field, TypeTag.OBJECT, BindErrorText.AN_OBJECT, path);
             Map<String, Object> out = new java.util.LinkedHashMap<>();
             for (String key : field.keys()) {
                 out.put(key, toValue(field.get(key), arguments[1], path + "." + key, config));
             }
             return out;
         }
-        throw new JsonBindException("unsupported generic type " + type.getTypeName(), path);
+        throw new JsonBindException(BindErrorText.unsupportedGenericType(type.getTypeName()), path);
     }
 
     private static Object toArray(Node field, Class<?> element, String path, BindConfig config) {
@@ -84,7 +85,7 @@ final class BindValues {
     /** The array binding for any component type: the component keeps its full generic form. */
     private static Object toGenericArray(Node field, java.lang.reflect.Type component,
                                          String path, BindConfig config) {
-        requireTag(field, TypeTag.ARRAY, "an array", path);
+        requireTag(field, TypeTag.ARRAY, BindErrorText.AN_ARRAY, path);
         List<Node> elements = field.elements();
         Class<?> raw = (component instanceof Class<?> c)
                 ? c
@@ -99,23 +100,23 @@ final class BindValues {
     private static Object toScalarOrStructure(Node field, Class<?> raw, String path, BindConfig config) {
         return switch (BindingShape.of(raw)) {
             case TEXT -> {
-                requireTag(field, TypeTag.STRING, "a string", path);
+                requireTag(field, TypeTag.STRING, BindErrorText.A_STRING, path);
                 yield field.asText();
             }
             case BOOLEAN -> {
-                requireTag(field, TypeTag.BOOLEAN, "a boolean", path);
+                requireTag(field, TypeTag.BOOLEAN, BindErrorText.A_BOOLEAN, path);
                 yield field.asBoolean();
             }
             case NUMBER -> {
-                requireTag(field, TypeTag.NUMBER, "a number", path);
+                requireTag(field, TypeTag.NUMBER, BindErrorText.A_NUMBER, path);
                 yield numberAs(field, raw, path);
             }
             case ENUM -> {
-                requireTag(field, TypeTag.STRING, "a string", path);
+                requireTag(field, TypeTag.STRING, BindErrorText.A_STRING, path);
                 yield enumValue(raw, field.asText(), path);
             }
             case RECORD -> {
-                requireTag(field, TypeTag.OBJECT, "an object", path);
+                requireTag(field, TypeTag.OBJECT, BindErrorText.AN_OBJECT, path);
                 TypedBinder<?> generated = GeneratedRegistry.lookup(raw);
                 yield generated != null ? generated.parse(field, path, config)
                         : ReflectiveBinder.forClass(raw.asSubclass(java.lang.Record.class))
@@ -130,8 +131,7 @@ final class BindValues {
             // Unreachable in this dispatch: arrays and the parameterized List/Map forms are
             // routed above (toValue / toParameterized); a bare List/Map raw falls here with
             // the same refusal it always had as an interface.
-            case ARRAY, LIST, MAP, UNBOUND -> throw new JsonBindException(
-                    "polymorphic binding is not supported for " + raw.getSimpleName(), path);
+            case ARRAY, LIST, MAP, UNBOUND -> throw new JsonBindException(BindErrorText.polymorphicUnsupported(raw.getSimpleName()), path);
         };
     }
 
@@ -140,8 +140,8 @@ final class BindValues {
         try {
             return Enum.valueOf((Class<? extends Enum>) raw, text);
         } catch (IllegalArgumentException unknownName) {
-            throw new JsonBindException("unknown enum name '" + text
-                    + "' for " + raw.getSimpleName(), path);
+            throw new JsonBindException(BindErrorText.unknownEnumName(text, raw.getSimpleName()),
+                    path);
         }
     }
 
@@ -234,17 +234,12 @@ final class BindValues {
         try {
             value = field.asLong();
         } catch (ArithmeticException beyondLong) {
-            throw new JsonBindException("number does not fit in a long", path);
+            throw new JsonBindException(BindErrorText.LONG_OVERFLOW, path);
         }
-        long bound = switch (target.getSimpleName()) {
-            case "byte", "Byte" -> Byte.MAX_VALUE;
-            case "short", "Short" -> Short.MAX_VALUE;
-            case "int", "Integer" -> Integer.MAX_VALUE;
-            default -> Long.MAX_VALUE;
-        };
-        // -bound - 1 is exact for all four widths: -(2^63-1)-1 == Long.MIN_VALUE in long math.
+        long bound = BindingShape.longBoundMax(target);
+        // the lower bound is -bound - 1 — exact for all four widths: -(2^63-1)-1 == Long.MIN_VALUE
         if (value > bound || value < -bound - 1) {
-            throw new JsonBindException("number does not fit in " + target.getSimpleName(), path);
+            throw new JsonBindException(BindErrorText.boundError(target.getSimpleName()), path);
         }
         if (target == byte.class || target == Byte.class) {
             return (byte) value;
@@ -262,7 +257,8 @@ final class BindValues {
      * reported as a bind exception at the value's path (never a raw accessor throw). */
     private static void requireTag(Node field, TypeTag expected, String wanted, String path) {
         if (field.type() != expected) {
-            throw new JsonBindException("expected " + wanted + " but found " + field.type(), path);
+            throw new JsonBindException(BindErrorText.expectedButFound(wanted, field.type().name()),
+                    path);
         }
     }
 }

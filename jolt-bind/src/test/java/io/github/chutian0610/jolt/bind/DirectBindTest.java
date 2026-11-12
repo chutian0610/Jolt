@@ -59,6 +59,20 @@ class DirectBindTest {
     }
 
     @Test
+    void longAcceptsExactDecimalForm() {
+        // the tree arm's asLong semantics — 1.0 is exactly 1L; one behavior on both arms
+        assertTwoArmsEqual("{\"b\":1,\"s\":2,\"l\":1.0,\"f\":1.5,\"d\":2.5}",
+                Widths.class, BindConfig.defaults());
+    }
+
+    @Test
+    void longRejectsFractionalValueIdentically() {
+        // 1.5 is not a whole number — the same overflow message on both arms (C5)
+        assertTwoArmsFailIdentically("{\"b\":1,\"s\":2,\"l\":1.5,\"f\":1.5,\"d\":2.5}",
+                Widths.class, BindConfig.defaults());
+    }
+
+    @Test
     void tracerTwoArmValueParity() {
         assertTwoArmsEqual("{\"name\":\"ann\",\"quantity\":2,\"active\":true}", Tracer.class, BindConfig.defaults());
     }
