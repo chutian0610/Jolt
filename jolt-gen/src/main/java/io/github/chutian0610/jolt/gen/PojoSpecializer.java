@@ -101,6 +101,15 @@ final class PojoSpecializer {
      * structural clauses (public concrete class, public no-arg constructor) live only in
      * {@link #isDirectCapable} — they are plan-buildability, not component visibility.
      */
+    /** The setter-parameter raws in declaration order — InitChildrenBody's shared input. */
+    private static Class<?>[] componentRaws(GenPlan<?> plan) {
+        Class<?>[] raws = new Class<?>[plan.setters.size()];
+        for (int i = 0; i < raws.length; i++) {
+            raws[i] = rawOf(componentType(plan, i));
+        }
+        return raws;
+    }
+
     static boolean componentsEmittable(Class<?> type) {
         for (Method setter : type.getMethods()) {
             if (PojoSupport.isSetter(setter)
@@ -182,29 +191,11 @@ final class PojoSpecializer {
                 .intercept(new Implementation.Simple(new CheckUnknownBody(self)))
                 .defineMethod(RecordSpecializer.INIT_CHILDREN_METHOD, void.class, Visibility.PUBLIC)
                 .intercept(new Implementation.Simple(
-                        new InitChildrenBody(self, plan, referenceForm, shapes)));
+                        new InitChildrenBody(self, componentRaws(plan), referenceForm, shapes)));
         if (isDirectCapable(plan.type)) {
-            // the direct forms: the document root and the nested body (the caller consumed
-            // this value's START_OBJECT), plus the capability flag the facade consults
-            builder = builder
-                    .defineMethod(RecordSpecializer.PARSE_TOKENS_METHOD, Object.class,
-                            Visibility.PUBLIC)
-                    .withParameters(io.github.chutian0610.jolt.JoltParser.class, BindConfig.class)
-                    .intercept(new Implementation.Simple(
-                            new ParseTokensBody(self, plan, false, referenceForm, shapes)))
-                    .defineMethod(RecordSpecializer.PARSE_TOKENS_BODY_METHOD, Object.class,
-                            Visibility.PUBLIC)
-                    .withParameters(io.github.chutian0610.jolt.JoltParser.class, BindConfig.class)
-                    .intercept(new Implementation.Simple(
-                            new ParseTokensBody(self, plan, true, referenceForm, shapes)))
-                    .defineMethod(RecordSpecializer.HAS_DIRECT_READ_METHOD, boolean.class,
-                            Visibility.PUBLIC)
-                    .intercept(new Implementation.Simple(
-                            (mv, context, method) -> {
-                                mv.visitInsn(Opcodes.ICONST_1);
-                                mv.visitInsn(Opcodes.IRETURN);
-                                return new ByteCodeAppender.Size(1, 0);
-                            }));
+            builder = RecordSpecializer.defineDirectForms(builder,
+                    new ParseTokensBody(self, plan, false, referenceForm, shapes),
+                    new ParseTokensBody(self, plan, true, referenceForm, shapes));
         }
         return builder;
     }
@@ -694,32 +685,9 @@ final class PojoSpecializer {
             // construct the default instance (the POJO construction is unconditional —
             // absent properties stay default). The M8 form resolves the carrier ONCE per
             // parse (the reference form re-resolves it per pushName/pop, the frozen M7 shape)
-            if (!nested) {
-                if (referenceForm) {
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetPath",
-                            "()V", false);
-                } else {
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetCarrier",
-                            "()Ljava/lang/Object;", false);
-                    mv.visitVarInsn(Opcodes.ASTORE, carrierSlot());
-                }
-            } else if (!referenceForm) {
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "takeCarrier",
-                        "()Ljava/lang/Object;", false);
-                mv.visitVarInsn(Opcodes.ASTORE, carrierSlot());
-            }
-            if (extra > 0) {
-                mv.visitInsn(Opcodes.ICONST_0);
-                mv.visitVarInsn(Opcodes.ISTORE, componentDepthSlot());
-                for (int d = 0; d < loopsDepth; d++) {
-                    mv.visitInsn(Opcodes.ACONST_NULL);
-                    mv.visitVarInsn(Opcodes.ASTORE, scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH);
-                    mv.visitInsn(Opcodes.ICONST_0);
-                    mv.visitVarInsn(Opcodes.ISTORE, scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH + 1);
-                    mv.visitInsn(Opcodes.ACONST_NULL);
-                    mv.visitVarInsn(Opcodes.ASTORE, scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH + 2);
-                }
-            }
+            DirectBodies.emitCarrierStep(mv, nested, referenceForm, carrierSlot());
+            DirectBodies.emitScratchClear(mv, extra, loopsDepth, componentDepthSlot(),
+                    scratchSlot());
             mv.visitVarInsn(Opcodes.ALOAD, 1);
             mv.visitMethodInsn(Opcodes.INVOKEINTERFACE, PARSER, "nextToken",
                     PARSER_NEXT_TOKEN_DESC, true);
@@ -866,20 +834,7 @@ final class PojoSpecializer {
                         Type.getMethodDescriptor(getter), false);
                 Class<?> returnType = getter.getReturnType();
                 if (returnType.isPrimitive()) {
-                    String boxed = switch (returnType.getName()) {
-                        case "int" -> "java/lang/Integer";
-                        case "long" -> "java/lang/Long";
-                        case "double" -> "java/lang/Double";
-                        case "float" -> "java/lang/Float";
-                        case "boolean" -> "java/lang/Boolean";
-                        case "byte" -> "java/lang/Byte";
-                        case "short" -> "java/lang/Short";
-                        default -> "java/lang/Character";
-                    };
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, boxed, "valueOf",
-                            "(" + Type.getType(returnType).getDescriptor() + ")L" + boxed + ";",
-                            false);
-                    slots.set(4, boxed);
+                    slots.set(4, Emit.boxPrimitive(mv, returnType));
                 } else {
                     slots.set(4, Emit.internal(returnType));
                 }
@@ -926,50 +881,4 @@ final class PojoSpecializer {
         }
     }
 
-    /** One-time baking: child binders for nested record/POJO setter parameters. */
-    private static final class InitChildrenBody implements ByteCodeAppender {
-
-        private final String self;
-        private final GenPlan<?> plan;
-        private final boolean referenceForm;
-        private final InlineCollections.Shape[] inline;
-
-        InitChildrenBody(String self, GenPlan<?> plan, boolean referenceForm,
-                         InlineCollections.Shape[] inline) {
-            this.self = self;
-            this.plan = plan;
-            this.referenceForm = referenceForm;
-            this.inline = inline;
-        }
-
-        @Override
-        public Size apply(MethodVisitor mv, Implementation.Context context,
-                          MethodDescription instrumentedMethod) {
-            for (int i = 0; i < plan.setters.size(); i++) {
-                Class<?> raw = rawOf(componentType(plan, i));
-                if (kindOf(raw) == Emit.Kind.CHILD) {
-                    mv.visitVarInsn(Opcodes.ALOAD, 0);
-                    mv.visitLdcInsn(Type.getType(raw));
-                    // the reference namespace resolves its children within itself — an
-                    // M8-off parent must not pick up an M8-form child through the main cache
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, Emit.GENERATED_INTERNAL,
-                            referenceForm ? "referenceForType" : "forType",
-                            "(Ljava/lang/Class;)" + TYPED_BINDER_FIELD_DESC, false);
-                    mv.visitFieldInsn(Opcodes.PUTFIELD, self, CHILD_FIELD_PREFIX + i,
-                            TYPED_BINDER_FIELD_DESC);
-                } else if (inline[i] != null && InlineCollections.childOf(inline[i]) != null) {
-                    // the inlined loop's element child (the M8 form only — shapes are null
-                    // in the reference form)
-                    mv.visitVarInsn(Opcodes.ALOAD, 0);
-                    mv.visitLdcInsn(Type.getType(InlineCollections.childOf(inline[i])));
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, Emit.GENERATED_INTERNAL,
-                            "forType", "(Ljava/lang/Class;)" + TYPED_BINDER_FIELD_DESC, false);
-                    mv.visitFieldInsn(Opcodes.PUTFIELD, self,
-                            Emit.ELEMENT_CHILD_FIELD_PREFIX + i, TYPED_BINDER_FIELD_DESC);
-                }
-            }
-            mv.visitInsn(Opcodes.RETURN);
-            return new Size(6, 1);
-        }
-    }
 }

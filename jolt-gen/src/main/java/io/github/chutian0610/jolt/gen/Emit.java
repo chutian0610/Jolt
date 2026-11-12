@@ -104,6 +104,27 @@ final class Emit {
         return Type.getType(type).getInternalName();
     }
 
+    /**
+     * Emits the primitive's boxing call — INVOKESTATIC {@code valueOf} on the boxed type —
+     * and returns the boxed type's internal name (the callers that track frame slots need
+     * it; the rest ignore it). The caller has already checked {@code isPrimitive}.
+     */
+    static String boxPrimitive(MethodVisitor mv, Class<?> primitive) {
+        String boxed = switch (primitive.getName()) {
+            case "int" -> "java/lang/Integer";
+            case "long" -> "java/lang/Long";
+            case "double" -> "java/lang/Double";
+            case "float" -> "java/lang/Float";
+            case "boolean" -> "java/lang/Boolean";
+            case "byte" -> "java/lang/Byte";
+            case "short" -> "java/lang/Short";
+            default -> "java/lang/Character";
+        };
+        mv.visitMethodInsn(Opcodes.INVOKESTATIC, boxed, "valueOf",
+                "(" + Type.getType(primitive).getDescriptor() + ")L" + boxed + ";", false);
+        return boxed;
+    }
+
     /** Appends operand-stack entries to a frame's stack declaration. */
     static Object[] withStack(Object[] prefix, Object... top) {
         Object[] out = new Object[prefix.length + top.length];
