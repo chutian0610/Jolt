@@ -196,29 +196,49 @@ final class RecordSpecializer {
                 .intercept(new Implementation.Simple(new CheckUnknownBody(self)))
                 .defineMethod(INIT_CHILDREN_METHOD, void.class, Visibility.PUBLIC)
                 .intercept(new Implementation.Simple(
-                        new InitChildrenBody(self, plan, referenceForm, shapes)));
+                        new InitChildrenBody(self, componentRaws(plan), referenceForm, shapes)));
         if (direct) {
-            // the third form: the token-consuming direct read (the document root), its
-            // nested body form (the caller consumed this value's START_OBJECT), and the
-            // capability flag the facade's withDirect dispatch consults
-            builder = builder
-                    .defineMethod(PARSE_TOKENS_METHOD, Object.class, Visibility.PUBLIC)
-                    .withParameters(JoltParser.class, BindConfig.class)
-                    .intercept(new Implementation.Simple(
-                            new ParseTokensBody(self, plan, false, referenceForm, shapes)))
-                    .defineMethod(PARSE_TOKENS_BODY_METHOD, Object.class, Visibility.PUBLIC)
-                    .withParameters(JoltParser.class, BindConfig.class)
-                    .intercept(new Implementation.Simple(
-                            new ParseTokensBody(self, plan, true, referenceForm, shapes)))
-                    .defineMethod(HAS_DIRECT_READ_METHOD, boolean.class, Visibility.PUBLIC)
-                    .intercept(new Implementation.Simple(
-                            (mv, context, method) -> {
-                                mv.visitInsn(Opcodes.ICONST_1);
-                                mv.visitInsn(Opcodes.IRETURN);
-                                return new ByteCodeAppender.Size(1, 0);
-                            }));
+            builder = defineDirectForms(builder,
+                    new ParseTokensBody(self, plan, false, referenceForm, shapes),
+                    new ParseTokensBody(self, plan, true, referenceForm, shapes));
         }
         return builder;
+    }
+
+    /**
+     * The direct-read method forms both specializers define identically: the token-consuming
+     * read (the document root), its nested body form (the caller consumed this value's
+     * START_OBJECT), and the capability flag the facade's withDirect dispatch consults. The
+     * two bodies arrive from the caller — each specializer's ParseTokensBody has its own
+     * slot layout.
+     */
+    static net.bytebuddy.dynamic.DynamicType.Builder<?> defineDirectForms(
+            net.bytebuddy.dynamic.DynamicType.Builder<?> builder,
+            net.bytebuddy.implementation.bytecode.ByteCodeAppender rootForm,
+            net.bytebuddy.implementation.bytecode.ByteCodeAppender nestedForm) {
+        return builder
+                .defineMethod(PARSE_TOKENS_METHOD, Object.class, Visibility.PUBLIC)
+                .withParameters(JoltParser.class, BindConfig.class)
+                .intercept(new Implementation.Simple(rootForm))
+                .defineMethod(PARSE_TOKENS_BODY_METHOD, Object.class, Visibility.PUBLIC)
+                .withParameters(JoltParser.class, BindConfig.class)
+                .intercept(new Implementation.Simple(nestedForm))
+                .defineMethod(HAS_DIRECT_READ_METHOD, boolean.class, Visibility.PUBLIC)
+                .intercept(new Implementation.Simple(
+                        (mv, context, method) -> {
+                            mv.visitInsn(Opcodes.ICONST_1);
+                            mv.visitInsn(Opcodes.IRETURN);
+                            return new ByteCodeAppender.Size(1, 0);
+                        }));
+    }
+
+    /** The component raws in declaration order — InitChildrenBody's shared input. */
+    private static Class<?>[] componentRaws(GenPlan<?> plan) {
+        Class<?>[] raws = new Class<?>[plan.genericTypes.length];
+        for (int i = 0; i < raws.length; i++) {
+            raws[i] = rawOf(plan.genericTypes[i]);
+        }
+        return raws;
     }
 
     /**
@@ -731,32 +751,9 @@ final class RecordSpecializer {
             // caller's path position); both zero the pooled seen flags and default every
             // slot. The M8 form resolves the carrier ONCE per parse (one ThreadLocal lookup
             // — the reference form re-resolves it per pushName/pop, the frozen M7 shape)
-            if (!nested) {
-                if (referenceForm) {
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetPath",
-                            "()V", false);
-                } else {
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetCarrier",
-                            "()Ljava/lang/Object;", false);
-                    mv.visitVarInsn(Opcodes.ASTORE, carrierSlot());
-                }
-            } else if (!referenceForm) {
-                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "takeCarrier",
-                        "()Ljava/lang/Object;", false);
-                mv.visitVarInsn(Opcodes.ASTORE, carrierSlot());
-            }
-            if (extra > 0) {
-                mv.visitInsn(Opcodes.ICONST_0);
-                mv.visitVarInsn(Opcodes.ISTORE, componentDepthSlot());
-                for (int d = 0; d < loopsDepth; d++) {
-                    mv.visitInsn(Opcodes.ACONST_NULL);
-                    mv.visitVarInsn(Opcodes.ASTORE, scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH);
-                    mv.visitInsn(Opcodes.ICONST_0);
-                    mv.visitVarInsn(Opcodes.ISTORE, scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH + 1);
-                    mv.visitInsn(Opcodes.ACONST_NULL);
-                    mv.visitVarInsn(Opcodes.ASTORE, scratchSlot() + d * InlineCollections.CELLS_PER_DEPTH + 2);
-                }
-            }
+            DirectBodies.emitCarrierStep(mv, nested, referenceForm, carrierSlot());
+            DirectBodies.emitScratchClear(mv, extra, loopsDepth, componentDepthSlot(),
+                    scratchSlot());
             pushIndex(mv, n);
             mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "takeSeen", "(I)[Z", false);
             mv.visitVarInsn(Opcodes.ASTORE, SEEN);
@@ -942,19 +939,7 @@ final class RecordSpecializer {
                         Type.getMethodDescriptor(accessor), false);
                 Class<?> returnType = accessor.getReturnType();
                 if (returnType.isPrimitive()) {
-                    String boxed = switch (returnType.getName()) {
-                        case "int" -> "java/lang/Integer";
-                        case "long" -> "java/lang/Long";
-                        case "double" -> "java/lang/Double";
-                        case "float" -> "java/lang/Float";
-                        case "boolean" -> "java/lang/Boolean";
-                        case "byte" -> "java/lang/Byte";
-                        case "short" -> "java/lang/Short";
-                        default -> "java/lang/Character";
-                    };
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, boxed, "valueOf",
-                            "(" + Type.getType(returnType).getDescriptor() + ")L" + boxed + ";",
-                            false);
+                    Emit.boxPrimitive(mv, returnType);
                 }
                 mv.visitVarInsn(Opcodes.ASTORE, 4);
                 mv.visitVarInsn(Opcodes.ALOAD, 2);
@@ -982,53 +967,4 @@ final class RecordSpecializer {
         }
     }
 
-    /**
-     * One-time field baking, run after cascade: the child binders for nested record/POJO
-     * components. Every other baked value is a public field injected via reflection.
-     */
-    private static final class InitChildrenBody implements ByteCodeAppender {
-
-        private final String self;
-        private final GenPlan<?> plan;
-        private final boolean referenceForm;
-        private final InlineCollections.Shape[] inline;
-
-        InitChildrenBody(String self, GenPlan<?> plan, boolean referenceForm,
-                         InlineCollections.Shape[] inline) {
-            this.self = self;
-            this.plan = plan;
-            this.referenceForm = referenceForm;
-            this.inline = inline;
-        }
-
-        @Override
-        public Size apply(MethodVisitor mv, Implementation.Context context,
-                          MethodDescription instrumentedMethod) {
-            for (int i = 0; i < plan.names.length; i++) {
-                Class<?> raw = rawOf(plan.genericTypes[i]);
-                if (kindOf(raw) == Emit.Kind.CHILD) {
-                    mv.visitVarInsn(Opcodes.ALOAD, 0);
-                    mv.visitLdcInsn(Type.getType(raw));
-                    // the reference namespace resolves its children within itself — an
-                    // M8-off parent must not pick up an M8-form child through the main cache
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, Emit.GENERATED_INTERNAL,
-                            referenceForm ? "referenceForType" : "forType",
-                            "(Ljava/lang/Class;)" + TYPED_BINDER_FIELD_DESC, false);
-                    mv.visitFieldInsn(Opcodes.PUTFIELD, self, CHILD_FIELD_PREFIX + i,
-                            TYPED_BINDER_FIELD_DESC);
-                } else if (inline[i] != null && InlineCollections.childOf(inline[i]) != null) {
-                    // the inlined loop's element child (the M8 form only — shapes are null
-                    // in the reference form)
-                    mv.visitVarInsn(Opcodes.ALOAD, 0);
-                    mv.visitLdcInsn(Type.getType(InlineCollections.childOf(inline[i])));
-                    mv.visitMethodInsn(Opcodes.INVOKESTATIC, Emit.GENERATED_INTERNAL,
-                            "forType", "(Ljava/lang/Class;)" + TYPED_BINDER_FIELD_DESC, false);
-                    mv.visitFieldInsn(Opcodes.PUTFIELD, self,
-                            Emit.ELEMENT_CHILD_FIELD_PREFIX + i, TYPED_BINDER_FIELD_DESC);
-                }
-            }
-            mv.visitInsn(Opcodes.RETURN);
-            return new Size(6, 1);
-        }
-    }
 }

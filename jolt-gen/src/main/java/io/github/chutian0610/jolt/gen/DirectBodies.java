@@ -495,6 +495,49 @@ final class DirectBodies {
         t.deliver(mv, cx, tryEnd, join);
     }
 
+    /**
+     * The parseTokens entry's carrier step: the root form resets the shared path (the nested
+     * form inherits the caller's path position); the M8 form resolves the carrier ONCE per
+     * parse (one ThreadLocal lookup — the reference form re-resolves it per pushName/pop,
+     * the frozen M7 shape). Slot numbers arrive as data: the two bodies lay their locals out
+     * differently.
+     */
+    static void emitCarrierStep(MethodVisitor mv, boolean nested, boolean referenceForm,
+                                int carrierSlot) {
+        if (!nested) {
+            if (referenceForm) {
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetPath",
+                        "()V", false);
+            } else {
+                mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetCarrier",
+                        "()Ljava/lang/Object;", false);
+                mv.visitVarInsn(Opcodes.ASTORE, carrierSlot);
+            }
+        } else if (!referenceForm) {
+            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "takeCarrier",
+                    "()Ljava/lang/Object;", false);
+            mv.visitVarInsn(Opcodes.ASTORE, carrierSlot);
+        }
+    }
+
+    /** The inline loops' scratch zeroing: the saved depth, then each depth's three cells. */
+    static void emitScratchClear(MethodVisitor mv, int extra, int loopsDepth,
+                                 int componentDepthSlot, int scratchSlot) {
+        if (extra <= 0) {
+            return;
+        }
+        mv.visitInsn(Opcodes.ICONST_0);
+        mv.visitVarInsn(Opcodes.ISTORE, componentDepthSlot);
+        for (int d = 0; d < loopsDepth; d++) {
+            mv.visitInsn(Opcodes.ACONST_NULL);
+            mv.visitVarInsn(Opcodes.ASTORE, scratchSlot + d * InlineCollections.CELLS_PER_DEPTH);
+            mv.visitInsn(Opcodes.ICONST_0);
+            mv.visitVarInsn(Opcodes.ISTORE, scratchSlot + d * InlineCollections.CELLS_PER_DEPTH + 1);
+            mv.visitInsn(Opcodes.ACONST_NULL);
+            mv.visitVarInsn(Opcodes.ASTORE, scratchSlot + d * InlineCollections.CELLS_PER_DEPTH + 2);
+        }
+    }
+
     // --- the shared scaffolding ---------------------------------------------------------
 
     /** The width-bound table, one copy behind the shared classification. */
