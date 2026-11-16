@@ -135,11 +135,6 @@ public final class Bind {
         GeneratedRegistry.register(type, binder);
     }
 
-    /** Test-visible registered lookup (same map the nested routing consults). */
-    public static TypedBinder<?> generatedLookupForTest(Class<?> type) {
-        return GeneratedRegistry.lookupForTest(type);
-    }
-
     // --- the two frozen ABI doors: the implementation moved, the descriptors did not ---
 
     /**

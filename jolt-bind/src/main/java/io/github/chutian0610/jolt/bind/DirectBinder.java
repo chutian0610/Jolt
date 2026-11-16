@@ -34,7 +34,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * multi-name chain); per-thread parsers are
  * reused via {@code reset} (the M1 reuse discipline).
  */
-final class DirectBinder<T> implements TypedBinder<T> {
+public final class DirectBinder<T> implements TypedBinder<T> {
 
     private static final Map<Class<?>, DirectBinder<?>> CACHE = new ConcurrentHashMap<>();
 
@@ -211,7 +211,9 @@ final class DirectBinder<T> implements TypedBinder<T> {
     }
 
     @SuppressWarnings("unchecked")
-    static <T> DirectBinder<T> forClass(Class<T> type) {
+    /** The reflective direct binder for {@code type}, cached per class — the gates' and
+     * benchmarks' direct door to this arm, independent of the facade's registry state. */
+    public static <T> DirectBinder<T> forClass(Class<T> type) {
         DirectBinder<?> cached = CACHE.get(type);
         if (cached != null) {
             return (DirectBinder<T>) cached;
@@ -269,12 +271,14 @@ final class DirectBinder<T> implements TypedBinder<T> {
     }
 
     /** Facade convenience: reuses the thread's parser (steady-state allocation = target graph). */
-    T parseDirect(byte[] json, BindConfig config) {
+    /** The token-consuming read from UTF-8 bytes — this arm, regardless of the facade's
+     * registry state. */
+    public T parseDirect(byte[] json, BindConfig config) {
         return parseTokens(DirectSupport.parserFor(json), config);
     }
 
     /** Facade convenience over the UTF-16 engine. */
-    T parseDirect(String json, BindConfig config) {
+    public T parseDirect(String json, BindConfig config) {
         return parseTokens(DirectSupport.parserFor(json), config);
     }
 

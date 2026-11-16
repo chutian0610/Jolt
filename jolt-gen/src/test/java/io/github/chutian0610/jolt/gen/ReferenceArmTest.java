@@ -42,7 +42,7 @@ class ReferenceArmTest {
         assertTrue(ref.getClass().getName().startsWith("io.github.chutian0610.jolt.gen.Gen$Ref$"),
                 ref.getClass().getName());
         // the facade registry never sees the reference arm
-        assertNull(Bind.generatedLookupForTest(Isolated.class),
+        assertNull(GeneratedBinders.lookup(Isolated.class),
                 "the reference arm must not register with the Bind facade");
         // the main form is a distinct class of the same type
         TypedBinder<?> main = GeneratedBinders.forType(Isolated.class);

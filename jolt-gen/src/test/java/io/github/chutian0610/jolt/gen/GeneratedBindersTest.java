@@ -54,7 +54,7 @@ class GeneratedBindersTest {
     @Test
     void generatedBinderRegistersForNestedRouting() {
         GeneratedBinders.forType(Point.class);
-        assertSame(GeneratedBinders.forType(Point.class), Bind.generatedLookupForTest(Point.class));
+        assertSame(GeneratedBinders.forType(Point.class), GeneratedBinders.lookup(Point.class));
     }
 
     @Test
@@ -161,7 +161,7 @@ class GeneratedBindersTest {
         assertThrows(NoSuchMethodException.class, () -> planCached.getDeclaredMethod("parse",
                 io.github.chutian0610.jolt.tree.Node.class, String.class, BindConfig.class));
         // the facade registry holds the specialized binder, never the reference arm
-        assertNotSame(planCached, Bind.generatedLookupForTest(BindFixtures.Customer.class));
+        assertNotSame(planCached, GeneratedBinders.lookup(BindFixtures.Customer.class));
         // but it binds identically (functional sanity)
         io.github.chutian0610.jolt.bind.fixtures.BindFixtures.Customer parsed =
                 (io.github.chutian0610.jolt.bind.fixtures.BindFixtures.Customer)

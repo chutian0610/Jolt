@@ -173,7 +173,7 @@ class GeneratedDirectTracerGateTest {
 
     @Test
     void theRegistryCarriesTheGeneratedClassWithAllThreeForms() throws Exception {
-        TypedBinder<?> registered = Bind.generatedLookupForTest(BindFixtures.Scalars.class);
+        TypedBinder<?> registered = GeneratedBinders.lookup(BindFixtures.Scalars.class);
         assertTrue(registered.getClass().getName().startsWith("io.github.chutian0610.jolt.gen.Gen$"));
         // the three forms on ONE instance: tree parse, direct parseTokens, write
         assertNotNull(registered.getClass().getDeclaredMethod("parse",
