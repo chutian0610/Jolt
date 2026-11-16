@@ -49,7 +49,9 @@ allocation is the target object graph only, with error paths assembled lazily on
 The write direction has been streaming since M4; "direct" names what the read side skips.
 Two implementation grades share one seam: the reflective direct binder (jolt-bind) and the
 generated direct binder (jolt-gen — the same generated class as the tree-path specialist,
-reading tokens instead of nodes).
+reading tokens instead of nodes). The grades' read bodies are a controlled mirror — one
+algorithm, two transcriptions, held level by the gate matrices; the semantic layers beneath
+them are single-sourced (ADR-0007).
 _Avoid_: streaming parse (the write side streams too — "direct" names the skipped tree),
 fast binding.
 
