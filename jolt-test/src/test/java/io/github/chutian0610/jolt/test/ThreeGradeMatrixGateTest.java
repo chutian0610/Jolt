@@ -1,5 +1,6 @@
 package io.github.chutian0610.jolt.test;
 
+import io.github.chutian0610.jolt.bind.DirectBinder;
 import io.github.chutian0610.jolt.bind.Bind;
 import io.github.chutian0610.jolt.bind.BindConfig;
 import io.github.chutian0610.jolt.bind.JsonBindException;
@@ -135,10 +136,10 @@ class ThreeGradeMatrixGateTest {
     /** The FIRST cell of a type: reflective-first (registry miss), then generate, then
      * generated — the full pairwise proof for this cell. */
     private static <T> void assertThreeGradesBind(String doc, Class<T> type) {
-        assertNull(Bind.generatedLookupForTest(type), type.getSimpleName()
-                + " must be ungenerated for the reflective arm to be the facade's first hit");
         T tree = Bind.parse(utf8(doc), type, BindConfig.defaults());
-        T reflective = Bind.parse(utf8(doc), type, BindConfig.defaults().withDirect());
+        // the reflective arm through its own door — order-independent of the registry
+        T reflective = DirectBinder.forClass(type)
+                .parseDirect(utf8(doc), BindConfig.defaults().withDirect());
         GeneratedBinders.forType(type);
         T generated = Bind.parse(utf8(doc), type, BindConfig.defaults().withDirect());
         assertEquals(tree, reflective, type.getSimpleName() + " reflective value");
@@ -151,7 +152,8 @@ class ThreeGradeMatrixGateTest {
         RuntimeException tree = assertThrows(RuntimeException.class,
                 () -> Bind.parse(utf8(doc), type, BindConfig.defaults()));
         RuntimeException reflective = assertThrows(RuntimeException.class,
-                () -> Bind.parse(utf8(doc), type, BindConfig.defaults().withDirect()));
+                () -> DirectBinder.forClass(type)
+                        .parseDirect(utf8(doc), BindConfig.defaults().withDirect()));
         GeneratedBinders.forType(type);
         RuntimeException generated = assertThrows(RuntimeException.class,
                 () -> Bind.parse(utf8(doc), type, BindConfig.defaults().withDirect()));
@@ -189,8 +191,8 @@ class ThreeGradeMatrixGateTest {
         }
     }
 
-    /** ONE ordered method by design: the three-grade cells require their fixture to be
-     * UNGENERATED, so the sequence matters (each fixture's three-grade cell first). */
+    /** One method, freely ordered: the reflective arm goes through its own door
+     * ({@code DirectBinder}), so no cell depends on the registry's state. */
     @Test
     void recordSpectrumPairwiseMatrix() {
         // one three-grade cell per fixture, while it is still ungenerated
@@ -323,11 +325,10 @@ class ThreeGradeMatrixGateTest {
         // a record whose child is a POJO: the nested dispatch's POJO arm — the three-grade
         // proof compares WRITES (Crate has identity equals), then the child's own setter
         // rejection at the nested path
-        assertNull(Bind.generatedLookupForTest(Shipment.class));
         String shipDoc = "{\"id\":\"s\",\"crate\":{\"label\":\"ok\",\"weight\":3,\"seq\":42}}";
         var shipTree = Bind.parse(utf8(shipDoc), Shipment.class, BindConfig.defaults());
-        var shipRefl = Bind.parse(utf8(shipDoc), Shipment.class,
-                BindConfig.defaults().withDirect());
+        var shipRefl = DirectBinder.forClass(Shipment.class)
+                .parseDirect(utf8(shipDoc), BindConfig.defaults().withDirect());
         GeneratedBinders.forType(Shipment.class);
         var shipGen = Bind.parse(utf8(shipDoc), Shipment.class,
                 BindConfig.defaults().withDirect());

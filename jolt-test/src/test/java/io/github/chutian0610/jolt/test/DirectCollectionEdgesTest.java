@@ -1,5 +1,9 @@
-package io.github.chutian0610.jolt.bind;
+package io.github.chutian0610.jolt.test;
 
+import io.github.chutian0610.jolt.bind.Bind;
+import io.github.chutian0610.jolt.bind.BindConfig;
+import io.github.chutian0610.jolt.bind.DirectBinder;
+import io.github.chutian0610.jolt.bind.JsonBindException;
 import io.github.chutian0610.jolt.gen.GeneratedBinders;
 import org.junit.jupiter.api.Test;
 
@@ -55,10 +59,10 @@ class DirectCollectionEdgesTest {
         Prims tree = Bind.parse(json, Prims.class, BindConfig.defaults());
         Prims reflective = DirectBinder.forClass(Prims.class)
                 .parseDirect(json, BindConfig.defaults().withDirect());
-        assertSame(tree, reflective);
+        assertSamePrims(tree, reflective);
         GeneratedBinders.forType(Prims.class);
         Prims generated = Bind.parse(json, Prims.class, BindConfig.defaults().withDirect());
-        assertSame(tree, generated);
+        assertSamePrims(tree, generated);
     }
 
     @Test
@@ -107,7 +111,8 @@ class DirectCollectionEdgesTest {
         }
     }
 
-    private static void assertSame(Prims expected, Prims actual) {
+    /** The primitives' deep comparison (its old name shadowed JUnit's assertSame). */
+    private static void assertSamePrims(Prims expected, Prims actual) {
         assertArrayEquals(expected.ints(), actual.ints());
         assertArrayEquals(expected.longs(), actual.longs());
         assertArrayEquals(expected.doubles(), actual.doubles());
