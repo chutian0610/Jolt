@@ -10,6 +10,7 @@ import net.bytebuddy.jar.asm.Type;
 import java.lang.reflect.Method;
 
 import static io.github.chutian0610.jolt.gen.Emit.CHILD_FIELD_PREFIX;
+import static io.github.chutian0610.jolt.gen.Emit.BIND_PATH;
 import static io.github.chutian0610.jolt.gen.Emit.DIRECT_SUPPORT;
 import static io.github.chutian0610.jolt.gen.Emit.GEN_BASE;
 import static io.github.chutian0610.jolt.gen.Emit.BIND_EXCEPTION;
@@ -510,12 +511,12 @@ final class DirectBodies {
                         "()V", false);
             } else {
                 mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "resetCarrier",
-                        "()Ljava/lang/Object;", false);
+                        "()L" + BIND_PATH + ";", false);
                 mv.visitVarInsn(Opcodes.ASTORE, carrierSlot);
             }
         } else if (!referenceForm) {
             mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "takeCarrier",
-                    "()Ljava/lang/Object;", false);
+                    "()L" + BIND_PATH + ";", false);
             mv.visitVarInsn(Opcodes.ASTORE, carrierSlot);
         }
     }
@@ -772,13 +773,12 @@ final class DirectBodies {
         } else {
             mv.visitVarInsn(Opcodes.ALOAD, cx.carrier());
             mv.visitLdcInsn(cx.keyOf().apply(i));
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pushName",
-                    "(Ljava/lang/Object;Ljava/lang/String;)V", false);
+            mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, BIND_PATH, "pushName",
+                    "(Ljava/lang/String;)V", false);
         }
         if (cx.inline()[i] != null) {
             mv.visitVarInsn(Opcodes.ALOAD, cx.carrier());
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "carrierDepth",
-                    "(Ljava/lang/Object;)I", false);
+            mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, BIND_PATH, "depth", "()I", false);
             mv.visitVarInsn(Opcodes.ISTORE, cx.componentDepth());
         }
         mv.visitVarInsn(Opcodes.ALOAD, 1);
@@ -808,7 +808,7 @@ final class DirectBodies {
             mv.visitVarInsn(Opcodes.ILOAD, cx.componentDepth());
             mv.visitVarInsn(Opcodes.ALOAD, 1);
             mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "recoverCollection",
-                    "(Ljava/lang/Object;ILio/github/chutian0610/jolt/JoltParser;)V", false);
+                    "(L" + BIND_PATH + ";ILio/github/chutian0610/jolt/JoltParser;)V", false);
         }
         mv.visitVarInsn(Opcodes.ALOAD, cx.errors());
         pushIndex(mv, i);
@@ -825,8 +825,7 @@ final class DirectBodies {
             mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop", "()V", false);
         } else {
             mv.visitVarInsn(Opcodes.ALOAD, cx.carrier());
-            mv.visitMethodInsn(Opcodes.INVOKESTATIC, DIRECT_SUPPORT, "pop",
-                    "(Ljava/lang/Object;)V", false);
+            mv.visitMethodInsn(Opcodes.INVOKEVIRTUAL, BIND_PATH, "pop", "()V", false);
         }
         mv.visitJumpInsn(Opcodes.GOTO, loopHead);
     }
