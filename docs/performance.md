@@ -32,7 +32,9 @@ correctness gates, which is why they have no section here.
   adjacent pair (median).
 - **Snapshots.** The `benchmark-snapshot` workflow runs the full baseline on a standard runner
   (manual trigger only), so snapshots are comparable across time and free of local-machine
-  noise. See [Reproducing the baseline](#reproducing-the-baseline).
+  noise. See [Reproducing the baseline](#reproducing-the-baseline). The first fixed snapshot —
+  the post-C4–C9 baseline — lives at
+  [docs/benchmarks/c4-c9-post-merge-snapshot.md](benchmarks/c4-c9-post-merge-snapshot.md).
 
 ## M1: the streaming core
 
