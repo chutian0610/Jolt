@@ -1,8 +1,29 @@
-# Jolt
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+    <img alt="Jolt — a zero-dependency, performance-first JSON parser and writer for the Java 21+ JVM" src="docs/assets/banner-light.svg" width="680">
+  </picture>
+</p>
 
-[![CI](https://github.com/chutian0610/Jolt/actions/workflows/ci.yml/badge.svg)](https://github.com/chutian0610/Jolt/actions/workflows/ci.yml)
-[![Java](https://img.shields.io/badge/java-21%2B-orange.svg)](https://docs.oracle.com/javase/specs/jls/se21/html/index.html)
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+<p align="center">
+  <a href="https://github.com/chutian0610/Jolt/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/chutian0610/Jolt/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://docs.oracle.com/javase/specs/jls/se21/html/index.html"><img alt="Java 21+" src="https://img.shields.io/badge/Java-21%2B-orange?logo=openjdk&amp;logoColor=white"></a>
+  <a href="docs/adr/0001-strict-rfc8259-by-default.md"><img alt="strict RFC 8259" src="https://img.shields.io/badge/strict-RFC%208259-2ea44f"></a>
+  <a href="docs/performance.md"><img alt="benchmarked with JMH" src="https://img.shields.io/badge/JMH-benchmarked-8250df"></a>
+  <a href="LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
+</p>
+
+<p align="center">
+  <a href="#highlights">Highlights</a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#tree-layer-jolt-tree">Tree</a> ·
+  <a href="#binding-layer-jolt-bind">Binding</a> ·
+  <a href="#performance">Performance</a> ·
+  <a href="#modules">Modules</a> ·
+  <a href="#documentation">Docs</a>
+</p>
+
+---
 
 A zero-dependency, performance-first JSON parser and writer for the Java 21+ JVM, engineered
 for the small-message workload: RPC frames, log events, MQ payloads — messages under a few
@@ -161,19 +182,28 @@ Supported targets, the capability rule, every entry point and switch:
 Measured with JMH on Apple Silicon (Zulu JDK 21): 3 forks × 5 × 1 s, `-prof gc` for
 allocation. Two multiples in a cell are two independent runs.
 
-| | Result | Against |
-|---|---|---|
-| Core token drain, ~90-byte message (reused instance) | **7.67M ± 0.11M ops/s**, ≈ 0 B/op | Jackson 2.18 `readTree` at 3.49M ± 0.10M ops/s; dsl-json 2.0.2 at 5.06M ± 0.54M |
-| Binding, generated direct read — POJO | **1.022× / 0.999×** — parity | Jackson 2.18 + Afterburner (the outright-win pin is **not met**) |
-| Binding, generated direct read — whole-graph record | **1.06× / 1.08×** | Jackson 2.18 databind |
-| Binding allocation, generated direct read | **392 B/op** (POJO), **1352 B/op** (whole-graph) | a 960 B/op target-graph floor |
+**Core token drain** — ~90-byte message, reused instance (steady-state ≈ 0 B/op):
 
-**Honest shape disclosure (the first row):** Jolt's arm drains the token stream with lazy
-materialization (nothing is built); the Jackson and dsl-json arms materialize full trees — each
-arm is its library's canonical small-message read path. This is "cheapest faithful read vs
-canonical read", not tokenizer-vs-tokenizer. Note also that Jackson's Afterburner module
-accelerates POJO binding and is inert on `readTree`; the bar compares against Jackson's canonical
-read regardless.
+| Library | ops/s |
+|---|---:|
+| **Jolt** | **7.67M ± 0.11M** |
+| dsl-json 2.0.2 | 5.06M ± 0.54M |
+| Jackson 2.18 `readTree` | 3.49M ± 0.10M |
+
+**Binding — the generated direct read vs Jackson 2.18:**
+
+| Benchmark | Result | Against |
+|---|---|---|
+| POJO | **1.022× / 0.999×** — parity | Jackson 2.18 + Afterburner (the outright-win pin is **not met**) |
+| Whole-graph record | **1.06× / 1.08×** | Jackson 2.18 databind |
+| Allocation | **392 B/op** (POJO), **1352 B/op** (whole-graph) | a 960 B/op target-graph floor |
+
+> **Honest shape disclosure (the core drain row):** Jolt's arm drains the token stream with lazy
+> materialization (nothing is built); the Jackson and dsl-json arms materialize full trees — each
+> arm is its library's canonical small-message read path. This is "cheapest faithful read vs
+> canonical read", not tokenizer-vs-tokenizer. Note also that Jackson's Afterburner module
+> accelerates POJO binding and is inert on `readTree`; the bar compares against Jackson's canonical
+> read regardless.
 
 Every bar of every milestone — including the ones that were straddled or not met — is in
 [docs/performance.md](docs/performance.md), with the commands to reproduce each number.

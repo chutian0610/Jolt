@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="280" viewBox="0 0 1200 280" role="img" aria-label="Jolt: a zero-dependency, performance-first JSON parser and writer for the Java 21+ JVM">
+  <defs>
+    <linearGradient id="bolt" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fde047"/>
+      <stop offset="1" stop-color="#f59e0b"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="280" fill="#ffffff"/>
+  <g transform="translate(425 68) scale(1.15)">
+    <path d="M58 0 L6 74 L34 74 L22 128 L76 50 L46 50 Z" fill="url(#bolt)"/>
+  </g>
+  <text x="549" y="200" textLength="225" lengthAdjust="spacingAndGlyphs" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="104" font-weight="700" fill="#0d1117">Jolt</text>
+  <text x="130" y="248" textLength="940" lengthAdjust="spacingAndGlyphs" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="22" fill="#57606a">A zero-dependency, performance-first JSON parser and writer for the Java 21+ JVM</text>
+</svg>
