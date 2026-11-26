@@ -21,14 +21,14 @@ public door, #77 ADR-0007 the controlled mirror).
 The multiples below are within-run (same-batch arms), read with 99.9% bands per the house
 rules; absolute numbers stay runner-specific.
 
-- **The outright-win pin is met on this runner.** Generated direct beats Jackson afterburner
-  on the POJO fixture at **1.345×** (direct bind), **1.365×** (M8 tracer) and **1.336×**
-  (gap dissection) — three independent batches, bands disjoint in all three: the slowest
-  Jolt edge, 3.436M ops/s, clears the fastest afterburner edge, 2.664M. The M9 gate judged
-  the same pin NOT MET on the gate machine (parity-to-ahead, overlapping bands,
-  #66) and that verdict stands for its platform — the pin is **platform-sensitive**, and
-  this snapshot is the second platform's evidence. Any future re-adjudication of a
-  win-type bar must first settle which platform adjudicates.
+- **The outright-win pin is adjudicated MET — this runner is the adjudication platform.**
+  Generated direct beats Jackson afterburner on the POJO fixture at **1.345×** (direct bind),
+  **1.365×** (M8 tracer) and **1.336×** (gap dissection) — three independent batches, bands
+  disjoint in all three: the slowest Jolt edge, 3.436M ops/s, clears the fastest afterburner
+  edge, 2.664M. The M9 gate had judged the same pin NOT MET on the gate machine
+  (parity-to-ahead, overlapping bands, #66) — the sensitivity this snapshot exposed became
+  the rule: **the fixed standard runner (Linux) adjudicates**; the gate machine's numbers
+  are archive evidence. Under that rule, this pin's verdict of record is **MET**.
 - **The M8 flip holds, now with disjoint bands.** Generated direct **1.067×** Jackson
   databind on the graph fixture (M8 tracer arm: **1.092×**), bands disjoint
   (625.7K > 605.1K ops/s).
