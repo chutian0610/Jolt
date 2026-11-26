@@ -30,7 +30,7 @@ jobs:
   benchmark-smoke:
     runs-on: ubuntu-latest
     # Smoke only: proves the benchmarks still run and the strict-parity shape holds.
-    # The real performance bars are measured on demand / locally (see T10/README).
+    # The real performance bars are measured on demand / locally (see T10 and docs/performance.md).
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
