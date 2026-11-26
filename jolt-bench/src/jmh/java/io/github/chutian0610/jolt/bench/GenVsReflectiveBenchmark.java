@@ -35,9 +35,10 @@ import java.util.List;
  * protocol):</b> the bar is MET on the M4-comparable POJO arm — specialized parse 3.28×
  * (6.15M ± 0.42M vs reflective 1.88M ± 0.22M ops/s) and specialized write 1.66×
  * (6.28M ± 0.29M vs 3.79M ± 0.13M ops/s); error bands do not overlap, no recalibration. The
- * M4-era baseline (README: generated ≈ 0.92×/0.94×) is reproduced by the plan-cached arm on
- * the same run (POJO 1.07× parse / 0.95× write vs reflective — parity within noise, as M4-T4
- * recorded): the M4→M5 delta is real and attributable to the straight-line bytecode.
+ * M4-era baseline (docs/performance.md: generated ≈ 0.92×/0.94×) is reproduced by the
+ * plan-cached arm on the same run (POJO 1.07× parse / 0.95× write vs reflective — parity
+ * within noise, as M4-T4 recorded): the M4→M5 delta is real and attributable to the
+ * straight-line bytecode.
  *
  * <p>The nested-record arm covers the FULL graph for correctness; its specialized-vs-
  * reflective multiples are parse 1.01× / write 1.06× — an honest shape disclosure, not a
@@ -49,7 +50,7 @@ import java.util.List;
  * <p>The plan-cached arm executes the top-level binder through the M4 plan executor; its
  * nested routing resolves through the facade registry, which since M5 holds specialized
  * child binders — the arm therefore isolates the plan-executor layer, not the full M4 stack
- * (the full M4 numbers are the 0.92×/0.94× recorded in the README).
+ * (the full M4 numbers are the 0.92×/0.94× recorded in docs/performance.md).
  *
  * <p>Reproduce: {@code ./gradlew :jolt-bench:jmh -Pjmh.include='.*GenVsReflective.*'}.
  *

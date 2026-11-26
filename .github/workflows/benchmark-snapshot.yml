@@ -22,8 +22,8 @@ jobs:
       - name: Build the JMH jar
         run: ./gradlew :jolt-bench:jmhJar
 
-      # Ten serial batches, README conventions (-wi 5 -i 5 -f 3; -prof gc where the
-      # docs use it). One JMH at a time — parallel runs would pollute each other.
+      # Ten serial batches, docs/performance.md conventions (-wi 5 -i 5 -f 3; -prof gc
+      # where that file uses it). One JMH at a time — parallel runs would pollute each other.
       - name: Run the snapshot batches
         run: |
           JAR=jolt-bench/build/libs/*-jmh.jar
