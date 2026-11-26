@@ -8,7 +8,8 @@ public door, #77 ADR-0007 the controlled mirror).
 
 - **Environment**: GitHub Actions standard runner (`ubuntu-latest`, 4 vCPU), Zulu JDK 21,
   single-threaded JMH forks. **Absolute numbers are runner-specific** — comparable only to
-  other runs of this workflow, not to the README's gate numbers taken elsewhere.
+  other runs of this workflow, which is also where the README's headline numbers come from;
+  the historical gate bars (the gate machine) live in [performance.md](performance.md).
 - **Run**: [benchmark-snapshot #45771518709](https://github.com/chutian0610/Jolt/actions/runs/45771518709),
   2026-11-26, README conventions (`-wi 5 -i 5 -f 3`; `-prof gc` where noted), ten serial batches,
   all successful.
@@ -24,7 +25,7 @@ rules; absolute numbers stay runner-specific.
   on the POJO fixture at **1.345×** (direct bind), **1.365×** (M8 tracer) and **1.336×**
   (gap dissection) — three independent batches, bands disjoint in all three: the slowest
   Jolt edge, 3.436M ops/s, clears the fastest afterburner edge, 2.664M. The M9 gate judged
-  the same pin NOT MET on the Apple Silicon machine (parity-to-ahead, overlapping bands,
+  the same pin NOT MET on the gate machine (parity-to-ahead, overlapping bands,
   #66) and that verdict stands for its platform — the pin is **platform-sensitive**, and
   this snapshot is the second platform's evidence. Any future re-adjudication of a
   win-type bar must first settle which platform adjudicates.
@@ -40,7 +41,7 @@ rules; absolute numbers stay runner-specific.
 - **The jolt-simd park reproduces on x86_64 — sharper.** The compact drains are not parity
   here but a **significant regression**: simd/scalar **0.942×** (POJO) / **0.973×** (graph),
   bands disjoint with SIMD behind. Where spans dominate, long strings run **5.77×** ahead
-  (Apple: 4.5×). The negative result now holds on two architectures; the attribution in
+  (gate machine: 4.5×). The negative result now holds on two architectures; the attribution in
   [simd.md](../simd.md) — span shape, not API maturity — is unaffected.
 - **Strict parity holds.** switches-off/default = **1.016×**, bands overlapping —
   statistically indistinguishable, as the README's correctness claim requires.

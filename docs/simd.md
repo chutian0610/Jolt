@@ -17,7 +17,7 @@ the release.
 
 ## The ship rule and its result
 
-Two independent in-run A/B runs (3 forks × 5×1s, `-prof gc`, Apple Silicon, Zulu 21):
+Two independent in-run A/B runs (3 forks × 5×1s, `-prof gc`, the gate machine, Zulu 21):
 
 | Token drain | Scalar | SIMD | Ratio (run 1 / run 2) |
 |---|---|---|---|
