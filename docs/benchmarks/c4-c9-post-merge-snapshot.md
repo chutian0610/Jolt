@@ -15,6 +15,38 @@ public door, #77 ADR-0007 the controlled mirror).
 - Re-run via `gh workflow run benchmark-snapshot.yml` — snapshots are only meaningful as
   same-workflow comparisons.
 
+### What this snapshot adjudicates
+
+The multiples below are within-run (same-batch arms), read with 99.9% bands per the house
+rules; absolute numbers stay runner-specific.
+
+- **The outright-win pin is met on this runner.** Generated direct beats Jackson afterburner
+  on the POJO fixture at **1.345×** (direct bind), **1.365×** (M8 tracer) and **1.336×**
+  (gap dissection) — three independent batches, bands disjoint in all three: the slowest
+  Jolt edge, 3.436M ops/s, clears the fastest afterburner edge, 2.664M. The M9 gate judged
+  the same pin NOT MET on the Apple Silicon machine (parity-to-ahead, overlapping bands,
+  #66) and that verdict stands for its platform — the pin is **platform-sensitive**, and
+  this snapshot is the second platform's evidence. Any future re-adjudication of a
+  win-type bar must first settle which platform adjudicates.
+- **The M8 flip holds, now with disjoint bands.** Generated direct **1.067×** Jackson
+  databind on the graph fixture (M8 tracer arm: **1.092×**), bands disjoint
+  (625.7K > 605.1K ops/s).
+- **Zero allocation reproduces, byte-identical.** `reusedInstanceTokenDrain` **0.000 B/op**;
+  generated direct **392.004** (POJO) / **1,352.00** (graph) B/op — identical digits to the
+  gate record, as allocation is deterministic. The graph arithmetic is exact: 960
+  (`baselineConstructOrder`, the object graph) + 392 = 1,352 — the direct read adds 392
+  B/op over the graph itself. Jackson's arms allocate **1,160** (afterburner) /
+  **2,952** (databind) B/op on the same fixtures: **2.96× / 2.18×** Jolt's direct path.
+- **The jolt-simd park reproduces on x86_64 — sharper.** The compact drains are not parity
+  here but a **significant regression**: simd/scalar **0.942×** (POJO) / **0.973×** (graph),
+  bands disjoint with SIMD behind. Where spans dominate, long strings run **5.77×** ahead
+  (Apple: 4.5×). The negative result now holds on two architectures; the attribution in
+  [simd.md](../simd.md) — span shape, not API maturity — is unaffected.
+- **Strict parity holds.** switches-off/default = **1.016×**, bands overlapping —
+  statistically indistinguishable, as the README's correctness claim requires.
+- **Disclosure only:** `dslJsonReadAny` (3.674M) numerically exceeds `pojoDirectParse`
+  (3.512M), but the arms live in different JMH classes — no verdict, per the cross-config
+  convention.
 
 ### Direct bind (the facade's two read paths vs the tree path)
 
