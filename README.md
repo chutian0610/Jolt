@@ -179,24 +179,31 @@ Supported targets, the capability rule, every entry point and switch:
 
 ## Performance
 
-Measured with JMH on Apple Silicon (Zulu JDK 21): 3 forks × 5 × 1 s, `-prof gc` for
-allocation. Two multiples in a cell are two independent runs.
+Measured with JMH on the fixed standard runner — the `benchmark-snapshot` workflow
+(GitHub Actions, `ubuntu-latest`, Zulu JDK 21): 3 forks × 5 × 1 s, `-prof gc` for
+allocation. Reproducible via `gh workflow run benchmark-snapshot.yml`; a range or a pair
+in a cell spans the workflow's independent batches.
 
-**Core token drain** — ~90-byte message, reused instance (steady-state ≈ 0 B/op):
+**Core token drain** — ~90-byte message, each arm its library's canonical small-message
+read, three arms in one JMH run:
 
 | Library | ops/s |
 |---|---:|
-| **Jolt** | **7.67M ± 0.11M** |
-| dsl-json 2.0.2 | 5.06M ± 0.54M |
-| Jackson 2.18 `readTree` | 3.49M ± 0.10M |
+| **Jolt** | **6.53M ± 0.13M** |
+| dsl-json 2.0.2 | 3.67M ± 0.07M |
+| Jackson 2.18 `readTree` | 2.44M ± 0.03M |
 
 **Binding — the generated direct read vs Jackson 2.18:**
 
 | Benchmark | Result | Against |
 |---|---|---|
-| POJO | **1.022× / 0.999×** — parity | Jackson 2.18 + Afterburner (the outright-win pin is **not met**) |
-| Whole-graph record | **1.06× / 1.08×** | Jackson 2.18 databind |
-| Allocation | **392 B/op** (POJO), **1352 B/op** (whole-graph) | a 960 B/op target-graph floor |
+| POJO | **1.34–1.37×** — win, 99.9% bands disjoint across three batches | Jackson 2.18 + Afterburner |
+| Whole-graph record | **1.067× / 1.092×** | Jackson 2.18 databind |
+| Allocation | **392 B/op** (POJO), **1,352 B/op** (whole-graph) | Afterburner **1,160** / databind **2,952** — **2.96× / 2.18×** Jolt's |
+
+**Zero allocation** — the reused-instance drain measures **0.000 B/op**; the generated
+direct read's steady state is the target object graph only (a 960 B/op graph + a 392 B/op
+read on the whole-graph order, exactly — deterministic, byte-identical across platforms).
 
 > **Honest shape disclosure (the core drain row):** Jolt's arm drains the token stream with lazy
 > materialization (nothing is built); the Jackson and dsl-json arms materialize full trees — each
@@ -205,8 +212,16 @@ allocation. Two multiples in a cell are two independent runs.
 > accelerates POJO binding and is inert on `readTree`; the bar compares against Jackson's canonical
 > read regardless.
 
+> **Platform note:** the gate bars were pinned and adjudicated on the gate machine — a fixed
+> local development machine, hardware undisclosed — where the same POJO pin read **parity**
+> (1.022× / 0.999×, bands overlapping — the outright-win pin was not met there). The win line
+> is platform-sensitive; both records are kept, and the gates are only re-adjudicated through
+> their own pinned process.
+
 Every bar of every milestone — including the ones that were straddled or not met — is in
-[docs/performance.md](docs/performance.md), with the commands to reproduce each number.
+[docs/performance.md](docs/performance.md), and the snapshot's full adjudication is in
+[docs/benchmarks/c4-c9-post-merge-snapshot.md](docs/benchmarks/c4-c9-post-merge-snapshot.md),
+each with the commands to reproduce it.
 
 ## jolt-simd (experimental — parked)
 
@@ -263,6 +278,7 @@ Needs JDK 21 and the Gradle wrapper.
 | [docs/binding.md](docs/binding.md) | The binding layer in depth: read paths, generated binders, entry points, switches. |
 | [docs/performance.md](docs/performance.md) | The benchmark record: method, every milestone's bars and disclosures, reproduction commands. |
 | [docs/simd.md](docs/simd.md) | The parked Vector-API engine: the negative result, and how to try it anyway. |
+| [docs/technologies.md](docs/technologies.md) | The stack: what Jolt builds on, where each piece lives, and the boundary it must not cross. |
 | [docs/adr/](docs/adr/) | Architecture decision records, indexed below. |
 | [docs/agents/](docs/agents/) | Conventions for coding agents working in this repo. |
 

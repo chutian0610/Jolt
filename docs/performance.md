@@ -20,24 +20,27 @@ correctness gates, which is why they have no section here.
 ## Method
 
 - **Harness.** JMH: 3 forks × 5 iterations × 1 s after 5 warmup iterations (`-wi 5 -i 5 -f 3`;
-  the allocation check runs 2 forks), `-prof gc` for allocation. Local numbers were measured on
-  Apple Silicon macOS, Zulu JDK 21.
+  the allocation check runs 2 forks), `-prof gc` for allocation. **The headline numbers are the
+  fixed standard runner's** (see Snapshots); the historical gate bars in the milestone sections
+  below were pinned and adjudicated on the **gate machine** — a fixed local development machine,
+  hardware undisclosed — running Zulu JDK 21.
 - **In-run A/B.** The competitor arm and the Jolt arm it is judged against run in the same JMH
   run. It is the only trustworthy comparator (the M6 cross-day drift lesson): gates are
   adjudicated in-run, and cross-run multiples are disclosure only.
 - **Error bands.** Every multiple is read with its error bands: overlapping bands mean parity,
   and a win needs bands that are disjoint and ahead.
-- **Adjacent-pair alternation.** The machine drifts up to ±10% within two hours, so wherever no
-  in-run A/B arm exists, baseline and config runs are interleaved and the ratio is taken per
+- **Adjacent-pair alternation.** The gate machine drifts up to ±10% within two hours, so wherever
+  no in-run A/B arm exists, baseline and config runs are interleaved and the ratio is taken per
   adjacent pair (median).
 - **Snapshots.** The `benchmark-snapshot` workflow runs the full baseline on a standard runner
   (manual trigger only), so snapshots are comparable across time and free of local-machine
-  noise. See [Reproducing the baseline](#reproducing-the-baseline). The first fixed snapshot —
+  noise — **this is the record the README quotes**. See
+  [Reproducing the baseline](#reproducing-the-baseline). The first fixed snapshot —
   the post-C4–C9 baseline — lives at
   [docs/benchmarks/c4-c9-post-merge-snapshot.md](benchmarks/c4-c9-post-merge-snapshot.md).
   Its adjudication: the outright-win pin (POJO generated direct ≥ 1.0× Jackson afterburner)
   is **met on this runner** — 1.34–1.37× with disjoint bands across three batches — where the
-  M9 gate read parity-to-ahead on Apple Silicon (#66): the win line is **platform-sensitive**,
+  M9 gate read parity-to-ahead on the gate machine (#66): the win line is **platform-sensitive**,
   so any future re-adjudication settles the platform first.
 
 ## M1: the streaming core
