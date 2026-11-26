@@ -35,6 +35,10 @@ correctness gates, which is why they have no section here.
   noise. See [Reproducing the baseline](#reproducing-the-baseline). The first fixed snapshot —
   the post-C4–C9 baseline — lives at
   [docs/benchmarks/c4-c9-post-merge-snapshot.md](benchmarks/c4-c9-post-merge-snapshot.md).
+  Its adjudication: the outright-win pin (POJO generated direct ≥ 1.0× Jackson afterburner)
+  is **met on this runner** — 1.34–1.37× with disjoint bands across three batches — where the
+  M9 gate read parity-to-ahead on Apple Silicon (#66): the win line is **platform-sensitive**,
+  so any future re-adjudication settles the platform first.
 
 ## M1: the streaming core
 

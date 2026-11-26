@@ -34,6 +34,31 @@ every arm (≈ 0 B/op — the vector mask chain is fully intrinsified in steady 
 The dissection behind the lever, and the rest of the M9 record, is in
 [performance.md](performance.md#m9-the-scanner-floor-attack).
 
+## When this comes back
+
+The negative result is **terminal for the small-message workload**: its cause is the
+workload's shape, not the API's maturity, so the levers that usually retire a "too early"
+verdict do not apply. Vector API graduation does not lengthen the 2–6-byte spans the compact
+fixtures offer; the mask chain is already fully intrinsified — zero allocation holds on every
+arm — so there is no JIT headroom either. Nothing short of a shape change re-opens this on
+its own.
+
+Two explicit triggers do:
+
+1. **The workload definition changes.** This library optimizes messages under ~4KB, where
+   spans are short and parity holds. Where spans dominate, the win is already demonstrated —
+   the disclosure row (8 × 200-char values) measured **4.46–4.68×**. If the product adopts a
+   long-string or large-message shape, pin a fresh win-to-ship bar for that workload and
+   re-adjudicate; this one does not transfer.
+2. **A vector shape appears for the dispatch itself.** Token dispatch, numbers and literals
+   stay scalar because no vector shape exists for a branchy one-byte-lookahead state machine.
+   If a future formulation produces one, re-run the scanner dissection first — it is what
+   ranked the scalar levers — then re-adjudicate.
+
+Either trigger restarts through the same gate: the `SimdDissection` A/B below, against a
+win-to-ship bar pinned **before** any new code exists, judged on in-run ratios only — the
+machine drifts up to ±10% within two hours, so cross-run multiples cannot adjudicate this.
+
 ## Using it anyway
 
 UTF-8 engine only; the String engine stays scalar. Every JVM that loads the engine needs
