@@ -212,11 +212,12 @@ read on the whole-graph order, exactly — deterministic, byte-identical across 
 > accelerates POJO binding and is inert on `readTree`; the bar compares against Jackson's canonical
 > read regardless.
 
-> **Platform note:** the gate bars were pinned and adjudicated on the gate machine — a fixed
-> local development machine, hardware undisclosed — where the same POJO pin read **parity**
-> (1.022× / 0.999×, bands overlapping — the outright-win pin was not met there). The win line
-> is platform-sensitive; both records are kept, and the gates are only re-adjudicated through
-> their own pinned process.
+> **Adjudication platform:** performance verdicts adjudicate on the fixed standard runner
+> above (Linux); the gate machine's numbers are archive evidence and never adjudicate a bar.
+> The gate bars were originally pinned and adjudicated on the gate machine — a fixed local
+> development machine, hardware undisclosed — where the same POJO pin read **parity**
+> (1.022× / 0.999×, bands overlapping); that entry is kept as archive. Under the settled
+> rule, the outright-win pin's verdict of record is **MET** — the win in the table above.
 
 Every bar of every milestone — including the ones that were straddled or not met — is in
 [docs/performance.md](docs/performance.md), and the snapshot's full adjudication is in
