@@ -1,0 +1,56 @@
+name: benchmark-snapshot
+
+# The full JMH baseline, run on a standard runner so snapshots are comparable
+# across time and free of local-machine noise. Manual trigger only.
+on:
+  workflow_dispatch:
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build the JMH jar
+        run: ./gradlew :jolt-bench:jmhJar
+
+      # Ten serial batches, README conventions (-wi 5 -i 5 -f 3; -prof gc where the
+      # docs use it). One JMH at a time — parallel runs would pollute each other.
+      - name: Run the snapshot batches
+        run: |
+          JAR=jolt-bench/build/libs/*-jmh.jar
+          run() {
+            local name=$1 regex=$2 prof=$3 extra=$4 forks=$5
+            echo "=== $name ($(date -u +%H:%M:%S)) ==="
+            java $extra -jar $JAR "$regex" -wi 5 -i 5 -f "$forks" $prof \
+                -rf json -rff "results/$name.json" > "results/$name.log" 2>&1
+            echo "$name rc=$?"
+          }
+          mkdir -p results
+          run direct-bind        '.*DirectBindBenchmark.*'        ''         ''                                   3
+          run direct-bind-alloc  '.*DirectBindAlloc.*'            '-prof gc' ''                                   3
+          run gen-vs-reflective  '.*GenVsReflective.*'            ''         ''                                   3
+          run m8-tracer          '.*M8Tracer.*'                   '-prof gc' ''                                   3
+          run gap-dissection     '.*GapDissection.*'              ''         ''                                   3
+          run scanner-dissection '.*ScannerDissection.*'          ''         ''                                   3
+          run competitor         'CompetitorBenchmark.*'          ''         ''                                   3
+          run strict-parity      '.*StrictParity.*'               ''         ''                                   3
+          run zero-alloc         '.*ZeroAlloc.*reusedInstance.*'  '-prof gc' ''                                   2
+          run simd-dissection    '.*SimdDissection.*'             '-prof gc' '--add-modules jdk.incubator.vector' 3
+
+      - name: Upload the snapshot (JSON results + logs)
+        uses: actions/upload-artifact@v4
+        with:
+          name: jmh-snapshot-${{ github.run_id }}
+          path: |
+            results/*.json
+            results/*.log
+          retention-days: 90
